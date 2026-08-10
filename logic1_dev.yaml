@@ -22,6 +22,7 @@ dependencies:
   - cython
   - pytest-cython
   - graphviz
+  - pysmt
   - python-graphviz
   - jupyter
   - line_profiler

@@ -20,6 +20,7 @@ dependencies = [
   "gmpy2",
   "more-itertools",
   "pyeda",
+  "pysmt",
 ]
 requires-python = ">=3.12"
 classifiers = [

@@ -18,6 +18,7 @@ dependencies:
   - more-itertools
   - networkx
   - pyeda
+  - pysmt
   - python-flint
   - sage
   - typing-extensions
