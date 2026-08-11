@@ -1,0 +1,6 @@
+# All subdirectories are automatically populated by downloading
+# from Zenodo (see `Makefile`).
+*/
+
+# Downloaded archives.
+*.tar.zst
