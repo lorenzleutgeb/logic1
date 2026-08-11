@@ -5,6 +5,8 @@ import functools
 from typing import Any, Callable, Final, Generic, Iterable, Iterator, Optional, Self, TYPE_CHECKING, TypeVar
 from typing_extensions import TypeIs
 
+import pysmt  # type: ignore[import-untyped]
+
 from logic1.support.tracing import trace
 
 if TYPE_CHECKING:
@@ -391,6 +393,240 @@ class Formula(ABC, Generic[α, τ, χ, σ]):
                 # Atomic formulas are caught by the implementation of the
                 # abstract method AtomicFormula.as_redlog.
                 assert False
+
+    # TODO: The return type of this method should be
+    # `logic1.theories.RCF.types.Formula` but this would be circular.
+    @staticmethod
+    def from_smtlib(formula: pysmt.fnode.FNode) -> Formula[Any, Any, Any, Any]:
+        """Convert a PySMT formula to a Logic1 RCF formula.
+
+        Boolean connectives, quantifiers, equality, order relations, and
+        polynomial arithmetic over real PySMT symbols are supported. Free
+        Boolean symbols are represented by fresh RCF variables constrained to
+        zero or one, with one representing true. PySMT integer variables and
+        purely integer formulas are rejected rather than implicitly embedded
+        into the reals; integer constants are admissible in otherwise-real
+        terms.
+
+        Raise :class:`NotImplementedError` when ``formula`` contains an operation
+        that cannot be represented by an RCF formula.
+        """
+
+        from typing import cast, TypeVar
+
+        from pysmt import operators as op  # type: ignore[import-untyped]
+        from pysmt.environment import get_env  # type: ignore[import-untyped]
+        from pysmt.fnode import FNode  # type: ignore[import-untyped]
+        from pysmt.formula import FormulaManager  # type: ignore[import-untyped]
+        from pysmt.typing import REAL  # type: ignore[import-untyped]
+
+        from gmpy2 import mpq
+
+        from logic1.firstorder import All, And, Equivalent, Ex, F, Implies, Not, Or, T
+        from logic1.theories.RCF.atomic import AtomicFormula
+        from logic1.theories.RCF.term import (init_env, init_env_arg, Term,
+                                              Variable, VV)
+        from logic1.theories.RCF.types import Formula
+
+        formula_cache: dict[FNode, Formula] = {}
+        term_cache: dict[FNode, Term] = {}
+        variable_map: dict[str, Variable] = {}
+        propositional_variable_map: dict[FNode, Variable] = {}
+
+        if not isinstance(formula, FNode):
+            raise TypeError(f'expecting a PySMT FNode; got {type(formula)}')
+
+        source_symbol_names: set[str] = set()
+        pending = [formula]
+        seen: set[FNode] = set()
+        while pending:
+            node = pending.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            if node.is_symbol():
+                source_symbol_names.add(node.symbol_name())
+            if node.is_quantifier():
+                pending.extend(node.quantifier_vars())
+            pending.extend(node.args())
+
+        propositional_symbols = sorted(
+            (node for node in seen
+             if node.is_symbol() and node.symbol_type().is_bool_type()),
+            key=lambda node: node.symbol_name())
+        used_variable_names = set(init_env_arg()).union(source_symbol_names)
+        propositional_names: dict[FNode, str] = {}
+        fresh_index = 1
+        for symbol in propositional_symbols:
+            fresh_name = f'G{fresh_index:04d}'
+            while fresh_name in used_variable_names:
+                fresh_index += 1
+                fresh_name = f'G{fresh_index:04d}'
+            propositional_names[symbol] = fresh_name
+            used_variable_names.add(fresh_name)
+            fresh_index += 1
+        init_env(list(propositional_names.values()))
+        for symbol, name in propositional_names.items():
+            propositional_variable_map[symbol] = VV[name]
+
+        def unsupported(node: FNode) -> NotImplementedError:
+            return NotImplementedError(
+                f'cannot convert PySMT node to a Logic1 RCF formula: {node!r}')
+
+        def rational(node: FNode) -> mpq:
+            value = node.constant_value()
+            return mpq(int(value.numerator), int(value.denominator))
+
+        def fresh_variable() -> Variable:
+            variable = VV.fresh()
+            while str(variable) in source_symbol_names:
+                variable = VV.fresh()
+            return variable
+
+        def convert_variable(node: FNode) -> Variable:
+            if not node.is_symbol():
+                raise unsupported(node)
+            symbol_type = node.symbol_type()
+            if symbol_type.is_bool_type():
+                if node not in propositional_variable_map:
+                    propositional_variable_map[node] = fresh_variable()
+                return propositional_variable_map[node]
+            if not symbol_type.is_real_type():
+                raise unsupported(node)
+            symbol_name = node.symbol_name()
+            if symbol_name in variable_map:
+                return variable_map[symbol_name]
+            try:
+                variable = VV[symbol_name]
+            except ValueError as exc:
+                expected_message = (
+                    f'variable name {symbol_name!r} is not alphanumeric')
+                if str(exc) != expected_message:
+                    raise
+                variable = fresh_variable()
+                variable_map[symbol_name] = variable
+            return variable
+
+        def is_real_term(node: FNode) -> bool:
+            """Determine the arithmetic sort without relying on a global PySMT
+            environment, which need not own ``node``.
+            """
+            if node.is_real_constant():
+                return True
+            if node.is_int_constant():
+                return False
+            if node.is_toreal():
+                raise unsupported(node)
+            if node.is_symbol():
+                symbol_type = node.symbol_type()
+                if symbol_type.is_real_type():
+                    return True
+                if symbol_type.is_int_type():
+                    raise unsupported(node)
+            if (node.is_plus() or node.is_minus() or node.is_times() or
+                    node.is_div()):
+                real_arguments = [is_real_term(arg) for arg in node.args()]
+                return any(real_arguments)
+            if node.node_type() == op.POW:
+                return is_real_term(node.arg(0))
+            raise unsupported(node)
+
+        def ensure_real_relation(node: FNode) -> None:
+            real_arguments = [is_real_term(arg) for arg in node.args()]
+            if not any(real_arguments):
+                raise unsupported(node)
+
+        def convert_term(node: FNode) -> Term:
+            cached = term_cache.get(node)
+            if cached is not None:
+                return cached
+
+            if node.is_symbol():
+                result: Term = convert_variable(node)
+            elif node.is_int_constant() or node.is_real_constant():
+                result = Term(rational(node))
+            elif node.is_plus():
+                result = sum((convert_term(arg) for arg in node.args()), start=Term(0))
+            elif node.is_minus():
+                result = convert_term(node.arg(0)) - convert_term(node.arg(1))
+            elif node.is_times():
+                result = Term(1)
+                for arg in node.args():
+                    result *= convert_term(arg)
+            elif node.node_type() == op.POW:
+                exponent = rational(node.arg(1))
+                exponent_denominator = int(str(exponent.denominator))
+                exponent_numerator = int(str(exponent.numerator))
+                if exponent_denominator != 1 or exponent_numerator < 0:
+                    raise unsupported(node)
+                result = convert_term(node.arg(0)) ** exponent_numerator
+            elif node.is_div():
+                # SMT integer division is not field division and cannot be
+                # embedded into RCF by merely changing the variable sort.
+                if not is_real_term(node):
+                    raise unsupported(node)
+                numerator = convert_term(node.arg(0))
+                denominator = convert_term(node.arg(1))
+                if not denominator.is_constant() or denominator.is_zero():
+                    raise unsupported(node)
+                result = numerator / denominator.as_constant()
+            elif node.is_toreal():
+                raise unsupported(node)
+            else:
+                raise unsupported(node)
+
+            term_cache[node] = result
+            return result
+
+        def convert_formula(node: FNode) -> Formula:
+            cached = formula_cache.get(node)
+            if cached is not None:
+                return cached
+
+            if node.is_true():
+                result: Formula = cast(Formula, T)
+            elif node.is_false():
+                result = cast(Formula, F)
+            elif node.is_symbol() and node.symbol_type().is_bool_type():
+                result = convert_variable(node) == 1
+            elif node.is_and():
+                result = And(*(convert_formula(arg) for arg in node.args()))
+            elif node.is_or():
+                result = Or(*(convert_formula(arg) for arg in node.args()))
+            elif node.is_implies():
+                result = Implies(convert_formula(node.arg(0)), convert_formula(node.arg(1)))
+            elif node.is_iff():
+                result = Equivalent(convert_formula(node.arg(0)), convert_formula(node.arg(1)))
+            elif node.is_not():
+                arg = convert_formula(node.arg(0))
+                result = arg.to_complement() if isinstance(arg, AtomicFormula) else Not(arg)
+            elif node.is_forall() or node.is_exists():
+                if any(var.symbol_type().is_bool_type()
+                       for var in node.quantifier_vars()):
+                    raise unsupported(node)
+                variables = [convert_variable(var) for var in node.quantifier_vars()]
+                quantifier = All if node.is_forall() else Ex
+                result = quantifier(variables, convert_formula(node.arg(0)))
+            elif node.is_equals():
+                ensure_real_relation(node)
+                result = convert_term(node.arg(0)) == convert_term(node.arg(1))
+            elif node.is_le():
+                ensure_real_relation(node)
+                result = convert_term(node.arg(0)) <= convert_term(node.arg(1))
+            elif node.is_lt():
+                ensure_real_relation(node)
+                result = convert_term(node.arg(0)) < convert_term(node.arg(1))
+            else:
+                raise unsupported(node)
+
+            formula_cache[node] = result
+            return result
+
+        converted_formula = convert_formula(formula)
+        domain_constraints = (
+            variable * (1 - variable) == 0
+            for variable in propositional_variable_map.values())
+        return And(*domain_constraints, converted_formula)
 
     def atoms(self) -> Iterator[α]:
         """

@@ -1,0 +1,81 @@
+Conversion from PySMT
+---------------------
+
+>>> from io import StringIO
+>>> import os
+>>> os.environ['PYSMT_CYTHON'] = '0'
+>>> from pysmt.environment import Environment
+>>> from pysmt.smtlib.parser import SmtLibParser
+>>> from pysmt.typing import BOOL, INT, REAL
+>>> from logic1.firstorder import Formula
+>>> environment = Environment()
+>>> manager = environment.formula_manager
+
+PySMT integer variables and purely integer formulas are not silently embedded
+into RCF:
+
+>>> i = manager.Symbol('smtlib_i', INT)
+>>> integer_domain = manager.And(manager.LE(manager.Int(1), i),
+...                              manager.GE(manager.Int(10), i))
+>>> try:
+...     Formula.from_smtlib(integer_domain)
+... except NotImplementedError:
+...     print('unsupported')
+unsupported
+
+Integer numerals used as coefficients of real terms are supported:
+
+>>> coefficient_script = SmtLibParser(environment=environment).get_script(
+...     StringIO('(set-logic QF_NRA) '
+...              '(declare-fun coefficient_x () Real) '
+...              '(assert (= (* 2 coefficient_x) 0)) '
+...              '(check-sat)'))
+>>> coefficient_formula = coefficient_script.get_strict_formula(manager)
+>>> sum(1 for _ in Formula.from_smtlib(coefficient_formula).atoms())
+1
+
+Explicit coercion from integers to reals is rejected as well:
+
+>>> coerced_integer = manager.LE(manager.ToReal(i), manager.Real(0))
+>>> try:
+...     Formula.from_smtlib(coerced_integer)
+... except NotImplementedError:
+...     print('unsupported')
+unsupported
+
+SMT-LIB identifiers that the polynomial backend rejects are consistently
+mapped to fresh Logic1 variables:
+
+>>> weird = manager.Symbol('smtlib_x!', REAL)
+>>> weird_domain = manager.And(manager.LT(manager.Real(0), weird),
+...                            manager.LT(weird, manager.Real(1)))
+>>> converted_weird_domain = Formula.from_smtlib(weird_domain)
+>>> len(set(converted_weird_domain.fvars()))
+1
+>>> sum(1 for _ in converted_weird_domain.atoms())
+2
+
+Propositional variables are represented by fresh RCF variables. The value one
+represents true, while an additional atom restricts the variable to zero or
+one:
+
+>>> proposition = manager.Symbol('smtlib_proposition', BOOL)
+>>> converted_proposition = Formula.from_smtlib(proposition)
+>>> proposition_variables = set(converted_proposition.fvars())
+>>> len(proposition_variables)
+1
+>>> proposition_variable = next(iter(proposition_variables))
+>>> proposition_atoms = set(converted_proposition.atoms())
+>>> (proposition_variable - 1 == 0) in proposition_atoms
+True
+>>> (proposition_variable * (1 - proposition_variable) == 0) in proposition_atoms
+True
+
+Operations outside RCF polynomial arithmetic are rejected. In particular,
+SMT integer division is not interpreted as field division:
+
+>>> try:
+...     Formula.from_smtlib(manager.Div(manager.Int(3), manager.Int(2)))
+... except NotImplementedError:
+...     print('unsupported')
+unsupported
