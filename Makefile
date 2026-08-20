@@ -83,8 +83,8 @@ test-doc:
 
 cython: $(CYTHON_SOS)
 
-logic1/theories/RCF/%$(EXT_SUFFIX): logic1/theories/RCF/%.pyx cython-setup.py
-	python cython-setup.py build_ext --inplace
+logic1/theories/RCF/%$(EXT_SUFFIX): logic1/theories/RCF/%.pyx setup.py
+	CYTHON_ANNOTATE=1 python setup.py build_ext --inplace
 
 cython-clean:
 	/bin/rm -f $(CYTHON_CS) $(CYTHON_HTMLS) $(CYTHON_SOS)

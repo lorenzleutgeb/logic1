@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+#### Infrastructure
+
+- Migrate dependency management, packaging, CI, and documentation builds from
+  Conda to pip. SageMath is now provided by the `sagelite` package.
+
+- Make the Cython extension build self-contained under pip build isolation by
+  declaring `gmpy2` as a build dependency, configuring its header path, linking
+  its direct GMP calls, and using one setup entry point for package and
+  development builds.
+
+- Work around PyEDA 0.29.0's incompatible function-pointer declarations when
+  building it with newer C compilers.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

@@ -7,24 +7,24 @@ on:
 jobs:
   build:
     runs-on: ubuntu-26.04
+    env:
+      CFLAGS: -Wno-incompatible-pointer-types
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: mamba-org/setup-micromamba@v3
+      - uses: actions/setup-python@v6
         with:
-          micromamba-version: '2.9.0-0'
-          environment-file: logic1_dev.yaml
-          init-shell: bash
-          cache-environment: true
-          post-cleanup: all
-          generate-run-shell: true
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --editable ".[dev]"
 
       - name: Generate Documentation in HTML format
         run: PYTHONPATH="$PYTHONPATH:$(pwd)" make cython doc
-        shell: micromamba-shell {0}
 
       - uses: actions/upload-pages-artifact@v5
         with: { path: 'doc/build/html' }

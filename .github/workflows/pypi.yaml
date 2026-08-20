@@ -6,21 +6,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    env:
+      CFLAGS: -Wno-incompatible-pointer-types
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: 3.12
-      - name: Initialize Conda
-        run: |
-          source $CONDA/etc/profile.d/conda.sh
-          conda config --add channels "conda-forge"
-          conda create -y -n logic1 sage
-          conda activate logic1
+          python-version: '3.12'
+          cache: pip
       - name: Install dependencies using pip
-        run: pip install .
+        run: python -m pip install .
       - name: Install pypa/build
-        run: pip install build
+        run: python -m pip install build
       - name: Build a binary wheel and a source tarball
         run: python -m build
       - name: Store the distribution packages

@@ -19,7 +19,11 @@ readme = "README.md"
 dependencies = [
   "gmpy2",
   "more-itertools",
+  "networkx",
   "pyeda",
+  "python-flint",
+  "sagelite",
+  "typing-extensions",
 ]
 requires-python = ">=3.12"
 classifiers = [
@@ -30,19 +34,30 @@ classifiers = [
   "Typing :: Typed"
 ]
 
-[build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8", "Cython>=3.1.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.local.cythonize.flags]
-annotate = true
-inplace = true
-
-[tool.setuptools]
-ext-modules = [
-  {name = "logic1.theories.RCF.range", sources = ["logic1/theories/RCF/range.pyx"]}
-#  {name = "logic1.theories.RCF.substitution", sources = ["logic1/theories/RCF/substitution.pyx"]}
+[project.optional-dependencies]
+dev = [
+  "build",
+  "coverage",
+  "Cython>=3.1.0",
+  "graphviz",
+  "jupyter",
+  "line-profiler",
+  "mypy",
+  "pytest",
+  "pytest-cython",
+  "pytest-xdist",
+  "setuptools",
+  "setuptools-scm",
+  "snakeviz",
+  "sphinx",
+  "sphinx-book-theme",
+  "types-networkx",
+  "viztracer",
 ]
+
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8", "Cython>=3.1.0", "gmpy2"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["logic1*"]
