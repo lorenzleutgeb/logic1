@@ -105,8 +105,8 @@ jobs:
         env:
           CIBW_ARCHS: >-
             ${{ case(
-              runner.os == 'Linux' && runner.arch == 'ARM64', 'aarch64',
-              runner.os == 'macOS' && runner.arch == 'ARM64', 'arm64',
+              endsWith(matrix.on, '-arm'), 'aarch64',
+              startsWith(matrix.on, 'macos') && !endsWith(matrix.on, '-intel'), 'arm64',
               'x86_64'
             ) }}
           CIBW_BEFORE_ALL_LINUX: yum install --assumeyes gmp-devel
