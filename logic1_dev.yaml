@@ -34,7 +34,7 @@ dependencies:
   - pytest-xdist
   - python-flint
   - rattler-build
-  - sage
+  - sagelib
   - setuptools
   - setuptools_scm
   - snakeviz

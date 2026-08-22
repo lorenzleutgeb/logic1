@@ -19,5 +19,5 @@ dependencies:
   - networkx
   - pyeda
   - python-flint
-  - sage
+  - sagelib
   - typing-extensions
