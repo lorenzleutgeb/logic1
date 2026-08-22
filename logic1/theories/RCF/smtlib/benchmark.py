@@ -346,7 +346,10 @@ def benchmark_instance(instance: Instance, timeout_seconds: float,
     if timeout_seconds <= 0:
         raise ValueError('timeout_seconds must be positive')
     if context is None:
-        context = mp.get_context('spawn')
+        # Fork inherits Logic1's expensive imports from the supervisor.  The
+        # worker is still isolated in its own process and can therefore be
+        # terminated reliably when the timeout expires.
+        context = mp.get_context('fork')
 
     receive, send = context.Pipe(duplex=False)
     process = context.Process(

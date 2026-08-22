@@ -140,7 +140,8 @@ def test_success_and_conversion_error_continue(
         '[2/2] 20200101-Demo/problem2.smt2: ok (complete, ')
 
 
-def test_timeout_is_structured(tmp_path: Path) -> None:
+def test_timeout_is_structured(tmp_path: Path,
+                               monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / 'QF_NRA'
     _problem(root / 'Demo' / 'problem1.smt2', '''
 (set-logic QF_NRA)
@@ -150,9 +151,18 @@ def test_timeout_is_structured(tmp_path: Path) -> None:
 ''')
     family = benchmark.discover_families(root)[0]
     instance = benchmark.select_instances('Demo:1', [family], root)[0]
+    get_context = benchmark.mp.get_context
+    start_methods: list[str] = []
+
+    def recording_get_context(method: str) -> Any:
+        start_methods.append(method)
+        return get_context(method)
+
+    monkeypatch.setattr(benchmark.mp, 'get_context', recording_get_context)
 
     result = benchmark.benchmark_instance(instance, timeout_seconds=0.01)
 
+    assert start_methods == ['fork']
     assert result['status'] == 'timeout'
     assert result['phase'] in {'startup', 'parse', 'convert', 'simplify'}
     assert 'variables' in result['smtlib']
