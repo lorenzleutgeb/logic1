@@ -92,6 +92,7 @@ class EndPoint:
         if other.finite_value is not None and mpq_equal(MPQ(other.finite_value), MPQ(mpq_ZERO)):
             return other
         # Complete case distinction on the regular cases:
+        finite_sign: cython.int
         if self.finite_value is not None and other.finite_value is not None:
             f1 = MPQ(self.finite_value)
             f2 = MPQ(other.finite_value)
@@ -99,10 +100,10 @@ class EndPoint:
             mpq_mul(MPQ(product), f1, f2)
             return EndPoint.__new__(EndPoint, product)
         elif self.finite_value is not None and other.finite_value is None:
-            finite_sign: cython.int = mpq_sgn(MPQ(self.finite_value))
+            finite_sign = mpq_sgn(MPQ(self.finite_value))
             return EndPoint.__new__(EndPoint, None, finite_sign * other.infinite_sign)
         elif self.finite_value is None and other.finite_value is not None:
-            finite_sign: cython.int = mpq_sgn(MPQ(other.finite_value))
+            finite_sign = mpq_sgn(MPQ(other.finite_value))
             return EndPoint.__new__(EndPoint, None, finite_sign * self.infinite_sign)
         else:
             return EndPoint.__new__(EndPoint, None, self.infinite_sign * other.infinite_sign)

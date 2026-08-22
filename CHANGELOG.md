@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Work around PyEDA 0.29.0's incompatible function-pointer declarations when
   building it with newer C compilers.
 
+- Merge pip CI and TestPyPI publishing into one workflow, producing CPython
+  3.14 wheels for x64 and ARM64 on Linux and macOS.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added
