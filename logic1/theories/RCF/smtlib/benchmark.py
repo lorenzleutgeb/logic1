@@ -5,11 +5,11 @@ Run this module from a Logic1 source checkout, for example::
     python -m logic1.theories.RCF.smtlib.benchmark 'Pine:1,ezsmt:-20,Geo'
     python -m logic1.theories.RCF.smtlib.benchmark --convert-only all
 
-The selected instances are processed sequentially.  Each instance runs in a
+The selected instances are processed concurrently.  Each instance runs in a
 fresh process so that it can be stopped reliably when its timeout expires.
 Standard output is JSON Lines: one metadata record followed by one result
-record per completed instance.  Human-readable progress is written to standard
-error.
+record per completed instance.  The coordinating process serializes both JSON
+results and human-readable progress; the latter is written to standard error.
 """
 
 from __future__ import annotations
@@ -18,14 +18,14 @@ import argparse
 from dataclasses import dataclass
 import json
 import multiprocessing as mp
-from multiprocessing.connection import Connection
+from multiprocessing.connection import Connection, wait
 from multiprocessing.process import BaseProcess
 import os
 from pathlib import Path
 import re
 import sys
 from time import perf_counter
-from typing import Any, Callable, Sequence, TypeVar
+from typing import Any, Callable, cast, Iterator, Sequence, TypeVar
 
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -382,20 +382,29 @@ def _record(instance: Instance, **values: Any) -> dict[str, Any]:
     }
 
 
-def benchmark_instance(instance: Instance, timeout_seconds: float,
-                       convert_only: bool = False,
-                       context: Any | None = None) \
-        -> dict[str, Any]:
-    """Run one instance with a hard timeout and return its JSON record."""
+@dataclass
+class _RunningInstance:
+    instance: Instance
+    receive: Connection
+    process: BaseProcess
+    startup_start: float
+    deadline: float
+    phase: str = 'startup'
+    atoms_before: int | None = None
+    smtlib_variables: dict[str, int] | None = None
+    prepared_elapsed: float | None = None
+    run_start: float | None = None
 
-    if timeout_seconds <= 0:
-        raise ValueError('timeout_seconds must be positive')
-    if context is None:
-        # Fork inherits Logic1's expensive imports from the supervisor.  The
-        # worker is still isolated in its own process and can therefore be
-        # terminated reliably when the timeout expires.
-        context = mp.get_context('fork')
 
+def benchmark_worker_count() -> int:
+    """Return the number of concurrent workers for this machine."""
+
+    return max(1, (os.process_cpu_count() or 1) - 2)
+
+
+def _start_instance(instance: Instance, timeout_seconds: float,
+                    convert_only: bool, context: Any) \
+        -> _RunningInstance | dict[str, Any]:
     receive, send = context.Pipe(duplex=False)
     process = context.Process(
         target=_benchmark_worker,
@@ -416,129 +425,188 @@ def benchmark_instance(instance: Instance, timeout_seconds: float,
             atoms_after=None,
             error={'type': type(exc).__name__, 'message': str(exc)})
     send.close()
+    return _RunningInstance(
+        instance=instance,
+        receive=receive,
+        process=process,
+        startup_start=startup_start,
+        deadline=startup_start + timeout_seconds)
 
-    phase = 'startup'
-    atoms_before: int | None = None
-    smtlib_variables: dict[str, int] | None = None
-    prepared_elapsed: float | None = None
-    run_start: float | None = None
-    final: dict[str, Any] | None = None
 
+def _timeout_result(run: _RunningInstance, now: float) -> dict[str, Any]:
+    start = run.run_start if run.run_start is not None else run.startup_start
+    elapsed = now - start
+    simplification_runtime = None
+    if run.prepared_elapsed is not None:
+        simplification_runtime = max(0.0, elapsed - run.prepared_elapsed)
+    return _record(
+        run.instance,
+        status='timeout',
+        phase=run.phase,
+        runtime_seconds=elapsed,
+        simplification_runtime_seconds=simplification_runtime,
+        smtlib_variables=run.smtlib_variables,
+        atoms_before=run.atoms_before,
+        atoms_after=None,
+        error=None)
+
+
+def _worker_error_result(run: _RunningInstance, now: float) -> dict[str, Any]:
+    start = run.run_start if run.run_start is not None else run.startup_start
+    if run.run_start is None:
+        message = 'worker exited before its startup handshake'
+    else:
+        message = f'worker exited with code {run.process.exitcode}'
+    return _record(
+        run.instance,
+        status='error',
+        phase=run.phase,
+        runtime_seconds=now - start,
+        simplification_runtime_seconds=None,
+        smtlib_variables=run.smtlib_variables,
+        atoms_before=run.atoms_before,
+        atoms_after=None,
+        error={'type': 'WorkerProcessError', 'message': message})
+
+
+def _handle_message(run: _RunningInstance, message: Any,
+                    timeout_seconds: float) -> dict[str, Any] | None:
+    if not isinstance(message, dict):
+        return _worker_error_result(run, perf_counter())
+
+    kind = message.get('kind')
+    if run.run_start is None:
+        if kind != 'started':
+            return _worker_error_result(run, perf_counter())
+        run.run_start = perf_counter()
+        run.deadline = run.run_start + timeout_seconds
+    elif kind == 'phase':
+        run.phase = message['phase']
+        run.smtlib_variables = message.get('smtlib_variables')
+    elif kind == 'prepared':
+        run.phase = 'simplify'
+        run.atoms_before = message['atoms_before']
+        run.prepared_elapsed = message['elapsed_seconds']
+    elif kind == 'result':
+        message.pop('kind', None)
+        return _record(run.instance, **message)
+    return None
+
+
+def benchmark_instances(
+        instances: Sequence[Instance], timeout_seconds: float,
+        convert_only: bool = False, workers: int = 1,
+        context: Any | None = None) -> Iterator[dict[str, Any]]:
+    """Run fresh instance processes concurrently and yield completed records."""
+
+    if timeout_seconds <= 0:
+        raise ValueError('timeout_seconds must be positive')
+    if workers <= 0:
+        raise ValueError('workers must be positive')
+    if context is None:
+        # Fork inherits Logic1's expensive imports from the supervisor.  The
+        # workers are still isolated in their own processes and can therefore be
+        # terminated reliably when the timeout expires.
+        context = mp.get_context('fork')
+
+    pending = iter(instances)
+    exhausted = False
+    running: dict[Connection, _RunningInstance] = {}
     try:
-        # Worker initialization is not part of the benchmark.  The same limit
-        # prevents a broken child from blocking the suite before its handshake.
-        if not receive.poll(timeout_seconds):
-            elapsed = perf_counter() - startup_start
-            return _record(
-                instance,
-                status='timeout',
-                phase=phase,
-                runtime_seconds=elapsed,
-                simplification_runtime_seconds=None,
-                atoms_before=None,
-                atoms_after=None,
-                error=None)
+        while running or not exhausted:
+            while len(running) < workers and not exhausted:
+                try:
+                    instance = next(pending)
+                except StopIteration:
+                    exhausted = True
+                    break
+                started = _start_instance(
+                    instance, timeout_seconds, convert_only, context)
+                if isinstance(started, dict):
+                    yield started
+                else:
+                    running[started.receive] = started
 
-        try:
-            started = receive.recv()
-        except EOFError:
-            started = None
-        if not isinstance(started, dict) or started.get('kind') != 'started':
-            return _record(
-                instance,
-                status='error',
-                phase=phase,
-                runtime_seconds=perf_counter() - startup_start,
-                simplification_runtime_seconds=None,
-                atoms_before=None,
-                atoms_after=None,
-                error={
-                    'type': 'WorkerProcessError',
-                    'message': 'worker exited before its startup handshake',
-                })
+            if not running:
+                continue
 
-        run_start = perf_counter()
-        deadline = run_start + timeout_seconds
-        while final is None:
-            remaining = deadline - perf_counter()
-            if remaining <= 0 or not receive.poll(remaining):
-                elapsed = perf_counter() - run_start
-                simplification_runtime = None
-                if prepared_elapsed is not None:
-                    simplification_runtime = max(0.0, elapsed - prepared_elapsed)
-                return _record(
-                    instance,
-                    status='timeout',
-                    phase=phase,
-                    runtime_seconds=elapsed,
-                    simplification_runtime_seconds=simplification_runtime,
-                    smtlib_variables=smtlib_variables,
-                    atoms_before=atoms_before,
-                    atoms_after=None,
-                    error=None)
-            try:
-                message = receive.recv()
-            except EOFError:
-                break
-            kind = message.get('kind')
-            if kind == 'phase':
-                phase = message['phase']
-                smtlib_variables = message.get('smtlib_variables')
-            elif kind == 'prepared':
-                phase = 'simplify'
-                atoms_before = message['atoms_before']
-                prepared_elapsed = message['elapsed_seconds']
-            elif kind == 'result':
-                final = message
+            now = perf_counter()
+            remaining = min(run.deadline for run in running.values()) - now
+            ready = wait(running, timeout=max(0.0, remaining))
+            for ready_connection in ready:
+                connection = cast(Connection, ready_connection)
+                run = running.get(connection)
+                if run is None:
+                    continue
+                result: dict[str, Any] | None
+                try:
+                    message = connection.recv()
+                except EOFError:
+                    result = _worker_error_result(run, perf_counter())
+                else:
+                    result = _handle_message(run, message, timeout_seconds)
+                if result is not None:
+                    del running[connection]
+                    connection.close()
+                    _stop_process(run.process)
+                    yield result
 
-        if final is None:
-            elapsed = perf_counter() - run_start
-            return _record(
-                instance,
-                status='error',
-                phase=phase,
-                runtime_seconds=elapsed,
-                simplification_runtime_seconds=None,
-                smtlib_variables=smtlib_variables,
-                atoms_before=atoms_before,
-                atoms_after=None,
-                error={
-                    'type': 'WorkerProcessError',
-                    'message': f'worker exited with code {process.exitcode}',
-                })
-
-        final.pop('kind', None)
-        return _record(instance, **final)
+            now = perf_counter()
+            expired = [
+                connection for connection, run in running.items()
+                if run.deadline <= now]
+            for connection in expired:
+                run = running.pop(connection)
+                result = _timeout_result(run, now)
+                connection.close()
+                _stop_process(run.process)
+                yield result
     finally:
-        receive.close()
-        _stop_process(process)
+        for run in running.values():
+            run.receive.close()
+            _stop_process(run.process)
+
+
+def benchmark_instance(instance: Instance, timeout_seconds: float,
+                       convert_only: bool = False,
+                       context: Any | None = None) \
+        -> dict[str, Any]:
+    """Run one instance with a hard timeout and return its JSON record."""
+
+    return next(benchmark_instances(
+        [instance], timeout_seconds, convert_only, context=context))
 
 
 def run_benchmarks(selector: str, root: Path = DEFAULT_BENCHMARK_ROOT,
                    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                    convert_only: bool = False,
+                   workers: int | None = None,
                    on_start: Callable[[dict[str, Any]], None] | None = None,
                    on_result: Callable[[dict[str, Any]], None] | None = None) \
         -> dict[str, Any]:
-    """Select and sequentially benchmark a QF_NRA suite."""
+    """Select and concurrently benchmark a QF_NRA suite."""
 
     instances = discover_instances(selector, root)
+    if workers is None:
+        workers = benchmark_worker_count()
     metadata = {
         'selector': selector,
         'timeout_seconds': timeout_seconds,
         'convert_only': convert_only,
+        'workers': workers,
     }
     if on_start is not None:
         on_start(metadata)
     results: list[dict[str, Any]] = []
     total = len(instances)
-    for number, instance in enumerate(instances, start=1):
-        result = benchmark_instance(instance, timeout_seconds, convert_only)
+    completed = benchmark_instances(
+        instances, timeout_seconds, convert_only, workers)
+    for number, result in enumerate(completed, start=1):
         results.append(result)
         if on_result is not None:
             on_result(result)
         print(
-            f'[{number}/{total}] {instance.problem}: {result["status"]} '
+            f'[{number}/{total}] {result["problem"]}: {result["status"]} '
             f'({result["phase"]}, {result["runtime_seconds"]:.3f}s)',
             file=sys.stderr,
             flush=True)

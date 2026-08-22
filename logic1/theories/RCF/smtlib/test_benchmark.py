@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+from time import sleep
 from typing import Any
 
 import pytest
@@ -144,10 +146,18 @@ def test_success_and_conversion_error_continue(
 (check-sat)
 ''')
 
-    report = benchmark.run_benchmarks('Demo', root, timeout_seconds=10.0)
+    coordinator_pid = os.getpid()
+    callback_pids: list[int] = []
+    report = benchmark.run_benchmarks(
+        'Demo', root, timeout_seconds=10.0, workers=2,
+        on_result=lambda _: callback_pids.append(os.getpid()))
 
     assert report['timeout_seconds'] == 10.0
-    first, second = report['results']
+    assert report['workers'] == 2
+    assert callback_pids == [coordinator_pid, coordinator_pid]
+    by_problem = {result['problem']: result for result in report['results']}
+    first = by_problem['20200101-Demo/problem1.smt2']
+    second = by_problem['20200101-Demo/problem2.smt2']
     assert first['status'] == 'error'
     assert first['phase'] == 'convert'
     assert first['error']['type'] == 'NotImplementedError'
@@ -163,10 +173,101 @@ def test_success_and_conversion_error_continue(
     progress = captured.err.splitlines()
     assert captured.out == ''
     assert len(progress) == 2
-    assert progress[0].startswith(
-        '[1/2] 20200101-Demo/problem1.smt2: error (convert, ')
-    assert progress[1].startswith(
-        '[2/2] 20200101-Demo/problem2.smt2: ok (complete, ')
+    assert {line.split('] ', 1)[1].split(': ', 1)[0] for line in progress} == {
+        '20200101-Demo/problem1.smt2',
+        '20200101-Demo/problem2.smt2'}
+
+
+def test_worker_count_reserves_two_cores(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(benchmark.os, 'process_cpu_count', lambda: 8)
+    assert benchmark.benchmark_worker_count() == 6
+
+    monkeypatch.setattr(benchmark.os, 'process_cpu_count', lambda: 2)
+    assert benchmark.benchmark_worker_count() == 1
+
+    monkeypatch.setattr(benchmark.os, 'process_cpu_count', lambda: None)
+    assert benchmark.benchmark_worker_count() == 1
+
+
+def test_benchmark_instances_run_concurrently(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    context = benchmark.mp.get_context('fork')
+    active = context.Value('i', 0)
+    peak = context.Value('i', 0)
+
+    def delayed_worker(problem: str, convert_only: bool,
+                       connection: Any) -> None:
+        benchmark._send(connection, {'kind': 'started'})
+        with active.get_lock():
+            active.value += 1
+            peak.value = max(peak.value, active.value)
+        sleep(0.1)
+        with active.get_lock():
+            active.value -= 1
+        benchmark._send(connection, {
+            'kind': 'result',
+            'status': 'ok',
+            'phase': 'convert',
+            'runtime_seconds': 0.1,
+            'simplification_runtime_seconds': None,
+            'smtlib_variables': {},
+            'atoms_before': 0,
+            'atoms_after': None,
+            'error': None,
+        })
+        connection.close()
+
+    monkeypatch.setattr(benchmark, '_benchmark_worker', delayed_worker)
+    instances = tuple(
+        benchmark.Instance('Demo', tmp_path / f'{number}.smt2',
+                           f'Demo/{number}.smt2')
+        for number in range(4))
+
+    results = list(benchmark.benchmark_instances(
+        instances, 10.0, True, workers=2, context=context))
+
+    assert len(results) == 4
+    assert peak.value == 2
+
+
+def test_parallel_timeout_does_not_stop_other_instances(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    context = benchmark.mp.get_context('fork')
+
+    def mixed_worker(problem: str, convert_only: bool,
+                     connection: Any) -> None:
+        benchmark._send(connection, {'kind': 'started'})
+        benchmark._send(connection, {'kind': 'phase', 'phase': 'parse'})
+        if problem.endswith('slow.smt2'):
+            sleep(1.0)
+            return
+        benchmark._send(connection, {
+            'kind': 'result',
+            'status': 'ok',
+            'phase': 'convert',
+            'runtime_seconds': 0.01,
+            'simplification_runtime_seconds': None,
+            'smtlib_variables': {},
+            'atoms_before': 0,
+            'atoms_after': None,
+            'error': None,
+        })
+        connection.close()
+
+    monkeypatch.setattr(benchmark, '_benchmark_worker', mixed_worker)
+    instances = tuple(
+        benchmark.Instance('Demo', tmp_path / name, f'Demo/{name}')
+        for name in ('slow.smt2', 'fast1.smt2', 'fast2.smt2'))
+
+    results = list(benchmark.benchmark_instances(
+        instances, 0.05, True, workers=2, context=context))
+    by_problem = {result['problem']: result for result in results}
+
+    assert by_problem['Demo/slow.smt2']['status'] == 'timeout'
+    assert by_problem['Demo/slow.smt2']['phase'] == 'parse'
+    assert by_problem['Demo/fast1.smt2']['status'] == 'ok'
+    assert by_problem['Demo/fast2.smt2']['status'] == 'ok'
 
 
 def test_timeout_is_structured(tmp_path: Path,
@@ -210,9 +311,10 @@ def test_convert_only_stops_before_simplification(tmp_path: Path) -> None:
 ''')
 
     report = benchmark.run_benchmarks(
-        'Demo:1', root, timeout_seconds=10.0, convert_only=True)
+        'Demo:1', root, timeout_seconds=10.0, convert_only=True, workers=1)
 
     assert report['convert_only'] is True
+    assert report['workers'] == 1
     result = report['results'][0]
     assert result['status'] == 'ok'
     assert result['phase'] == 'convert'
@@ -229,6 +331,7 @@ def test_main_streams_json_lines(monkeypatch: pytest.MonkeyPatch,
         'selector': 'Pine:1',
         'timeout_seconds': 30.0,
         'convert_only': True,
+        'workers': 6,
     }
     result = {
         'family': 'Pine',
