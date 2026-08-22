@@ -25,7 +25,7 @@ from pathlib import Path
 import re
 import sys
 from time import perf_counter
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TypeVar
 
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -44,11 +44,17 @@ class SelectionError(ValueError):
 
 
 @dataclass(frozen=True)
-class Family:
-    """A named directory of deterministically ordered SMT-LIB problems."""
+class FamilyDirectory:
+    """A named SMT-LIB family directory."""
 
     name: str
     directory: Path
+
+
+@dataclass(frozen=True)
+class Family(FamilyDirectory):
+    """A family with its deterministically ordered SMT-LIB problems."""
+
     problems: tuple[Path, ...]
 
 
@@ -79,13 +85,11 @@ def _natural_key(value: str) -> tuple[tuple[int, int | str], ...]:
     return tuple(parts)
 
 
-def discover_families(root: Path = DEFAULT_BENCHMARK_ROOT) -> tuple[Family, ...]:
-    """Discover all immediate family directories below ``root``."""
-
+def _discover_family_directories(root: Path) -> tuple[FamilyDirectory, ...]:
     if not root.is_dir():
         raise SelectionError(f'benchmark root is not a directory: {root}')
 
-    families: list[Family] = []
+    families: list[FamilyDirectory] = []
     names: dict[str, Path] = {}
     for directory in root.iterdir():
         if not directory.is_dir():
@@ -97,10 +101,7 @@ def discover_families(root: Path = DEFAULT_BENCHMARK_ROOT) -> tuple[Family, ...]
                 f'duplicate friendly family name {name!r}: '
                 f'{names[folded_name]} and {directory}')
         names[folded_name] = directory
-        problems = tuple(sorted(
-            directory.rglob('*.smt2'),
-            key=lambda path: _natural_key(path.relative_to(directory).as_posix())))
-        families.append(Family(name, directory, problems))
+        families.append(FamilyDirectory(name, directory))
 
     return tuple(sorted(
         families,
@@ -108,7 +109,26 @@ def discover_families(root: Path = DEFAULT_BENCHMARK_ROOT) -> tuple[Family, ...]
                             _natural_key(family.directory.name))))
 
 
-def _resolve_family(prefix: str, families: Sequence[Family]) -> Family:
+def _discover_problems(family: FamilyDirectory) -> Family:
+    problems = tuple(sorted(
+        family.directory.rglob('*.smt2'),
+        key=lambda path: _natural_key(
+            path.relative_to(family.directory).as_posix())))
+    return Family(family.name, family.directory, problems)
+
+
+def discover_families(root: Path = DEFAULT_BENCHMARK_ROOT) -> tuple[Family, ...]:
+    """Discover all families and their SMT-LIB problems below ``root``."""
+
+    return tuple(
+        _discover_problems(family)
+        for family in _discover_family_directories(root))
+
+
+_FamilyT = TypeVar('_FamilyT', bound=FamilyDirectory)
+
+
+def _resolve_family(prefix: str, families: Sequence[_FamilyT]) -> _FamilyT:
     folded_prefix = prefix.casefold()
     exact = [family for family in families
              if family.name.casefold() == folded_prefix]
@@ -156,55 +176,80 @@ def _problem_bounds(specification: str, count: int) -> tuple[int, int]:
     return first - 1, last
 
 
-def select_instances(selector: str, families: Sequence[Family],
-                     root: Path) -> tuple[Instance, ...]:
-    """Resolve ``selector`` to an ordered sequence of benchmark instances."""
-
+def _select_families(selector: str, families: Sequence[_FamilyT]) \
+        -> list[tuple[_FamilyT, str | None]]:
     selector = selector.strip()
     if not selector:
         raise SelectionError('empty benchmark selector')
 
-    selected: list[tuple[Family, Sequence[Path]]]
     if selector.casefold() == 'all':
-        selected = [(family, family.problems) for family in families]
-    else:
-        selected = []
-        seen: set[Path] = set()
-        for raw_item in selector.split(','):
-            item = raw_item.strip()
-            if not item:
-                raise SelectionError(f'invalid empty selector item in {selector!r}')
-            if item.count(':') > 1:
+        return [(family, None) for family in families]
+
+    selected: list[tuple[_FamilyT, str | None]] = []
+    seen: set[Path] = set()
+    for raw_item in selector.split(','):
+        item = raw_item.strip()
+        if not item:
+            raise SelectionError(f'invalid empty selector item in {selector!r}')
+        if item.count(':') > 1:
+            raise SelectionError(f'invalid selector item: {item!r}')
+        if ':' in item:
+            prefix, range_specification = (
+                component.strip() for component in item.split(':', 1))
+            if not prefix or not range_specification:
                 raise SelectionError(f'invalid selector item: {item!r}')
-            if ':' in item:
-                prefix, range_specification = (
-                    component.strip() for component in item.split(':', 1))
-                if not prefix or not range_specification:
-                    raise SelectionError(f'invalid selector item: {item!r}')
-            else:
-                prefix, range_specification = item, None
+        else:
+            prefix, range_specification = item, None
 
-            family = _resolve_family(prefix, families)
-            if family.directory in seen:
-                raise SelectionError(
-                    f'family selected more than once: {family.name!r}')
-            seen.add(family.directory)
+        family = _resolve_family(prefix, families)
+        if family.directory in seen:
+            raise SelectionError(
+                f'family selected more than once: {family.name!r}')
+        seen.add(family.directory)
+        selected.append((family, range_specification))
 
-            if range_specification is None:
-                problems: Sequence[Path] = family.problems
-            else:
-                first, last = _problem_bounds(
-                    range_specification, len(family.problems))
-                problems = family.problems[first:last]
-            selected.append((family, problems))
+    return selected
+
+
+def _instances_from_families(
+        selected: Sequence[tuple[Family, str | None]],
+        root: Path) -> tuple[Instance, ...]:
+    selected_problems: list[tuple[Family, Sequence[Path]]] = []
+    for family, range_specification in selected:
+        if range_specification is None:
+            problems: Sequence[Path] = family.problems
+        else:
+            first, last = _problem_bounds(
+                range_specification, len(family.problems))
+            problems = family.problems[first:last]
+        selected_problems.append((family, problems))
 
     return tuple(
         Instance(
             family=family.name,
             path=path.resolve(),
             problem=path.relative_to(root).as_posix())
-        for family, problems in selected
+        for family, problems in selected_problems
         for path in problems)
+
+
+def select_instances(selector: str, families: Sequence[Family],
+                     root: Path) -> tuple[Instance, ...]:
+    """Resolve ``selector`` among already discovered ``families``."""
+
+    return _instances_from_families(
+        _select_families(selector, families), root)
+
+
+def discover_instances(selector: str, root: Path) -> tuple[Instance, ...]:
+    """Discover problems only in the families selected by ``selector``."""
+
+    families = _discover_family_directories(root)
+    selected = _select_families(selector, families)
+    discovered = [
+        (_discover_problems(family), range_specification)
+        for family, range_specification in selected]
+    return _instances_from_families(discovered, root)
 
 
 def _send(connection: Connection, message: dict[str, Any]) -> None:
@@ -477,8 +522,7 @@ def run_benchmarks(selector: str, root: Path = DEFAULT_BENCHMARK_ROOT,
         -> dict[str, Any]:
     """Select and sequentially benchmark a QF_NRA suite."""
 
-    families = discover_families(root)
-    instances = select_instances(selector, families, root)
+    instances = discover_instances(selector, root)
     metadata = {
         'selector': selector,
         'timeout_seconds': timeout_seconds,

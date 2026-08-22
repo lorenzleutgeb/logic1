@@ -73,6 +73,35 @@ def test_all_selector(benchmark_root: Path) -> None:
         'Pine', 'ezsmt', 'Geogebra', 'Sturm-MBO', 'Sturm-MGC'}
 
 
+def test_discover_instances_only_traverses_selected_families(
+        benchmark_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rglob = Path.rglob
+    traversed: list[str] = []
+
+    def recording_rglob(directory: Path, pattern: str) -> Any:
+        traversed.append(directory.name)
+        return rglob(directory, pattern)
+
+    monkeypatch.setattr(Path, 'rglob', recording_rglob)
+
+    selected = benchmark.discover_instances(
+        'Pine:1,Geo', benchmark_root)
+
+    assert [instance.family for instance in selected] == ['Pine', 'Geogebra']
+    assert traversed == ['20200911-Pine', '20211101-Geogebra']
+
+    traversed.clear()
+    with pytest.raises(benchmark.SelectionError):
+        benchmark.discover_instances('Sturm', benchmark_root)
+    assert traversed == []
+
+    all_instances = benchmark.discover_instances('all', benchmark_root)
+    assert len(all_instances) == 48
+    assert set(traversed) == {
+        '20200911-Pine', '2019-ezsmt', '20211101-Geogebra',
+        'Sturm-MBO', 'Sturm-MGC'}
+
+
 @pytest.mark.parametrize('selector', [
     '',
     'unknown',
