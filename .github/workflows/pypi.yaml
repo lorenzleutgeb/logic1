@@ -77,19 +77,15 @@ jobs:
         target:
           - name: linux-x64
             os: ubuntu-24.04
-            platform: linux
             arch: x86_64
           - name: linux-arm64
             os: ubuntu-24.04-arm
-            platform: linux
             arch: aarch64
           - name: macos-x64
             os: macos-15-intel
-            platform: macos
             arch: x86_64
           - name: macos-arm64
             os: macos-15
-            platform: macos
             arch: arm64
     steps:
       - uses: actions/checkout@v7
@@ -100,7 +96,7 @@ jobs:
       - uses: actions/setup-python@v7
 
       - name: Install GMP on macOS
-        if: matrix.target.platform == 'macos'
+        if: startsWith(matrix.target.os, 'macos')
         shell: bash
         run: |
           brew install gmp
