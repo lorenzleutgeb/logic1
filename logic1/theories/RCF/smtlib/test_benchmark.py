@@ -175,10 +175,12 @@ def test_success_and_conversion_error_continue(
     assert first['status'] == 'error'
     assert first['phase'] == 'convert'
     assert first['error']['type'] == 'NotImplementedError'
+    assert first['smtlib']['atoms'] == 1
     assert first['smtlib']['variables'] == {'Real': 2}
     assert first['atoms_before'] is None
     assert second['status'] == 'ok'
     assert second['phase'] == 'complete'
+    assert second['smtlib']['atoms'] == 2
     assert second['smtlib']['variables'] == {'Real': 1}
     assert second['atoms_before'] == 2
     assert second['atoms_after'] == 1
@@ -309,6 +311,7 @@ def test_timeout_is_structured(tmp_path: Path,
     assert start_methods == ['fork']
     assert result['status'] == 'timeout'
     assert result['phase'] in {'startup', 'parse', 'convert', 'simplify'}
+    assert 'atoms' in result['smtlib']
     assert 'variables' in result['smtlib']
     assert result['atoms_after'] is None
     assert result['error'] is None
@@ -334,6 +337,7 @@ def test_convert_only_stops_before_simplification(tmp_path: Path) -> None:
     assert result['status'] == 'ok'
     assert result['phase'] == 'convert'
     assert result['simplification_runtime_seconds'] is None
+    assert result['smtlib']['atoms'] == 3
     assert result['smtlib']['variables'] == {'Bool': 1, 'Real': 1}
     assert result['atoms_before'] == 5
     assert result['atoms_after'] is None

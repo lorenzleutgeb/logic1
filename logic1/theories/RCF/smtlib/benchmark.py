@@ -283,6 +283,7 @@ def _benchmark_worker(problem: str, convert_only: bool,
     total_start = perf_counter()
     phase = 'parse'
     atoms_before: int | None = None
+    smtlib_atoms: int | None = None
     smtlib_variables: dict[str, int] | None = None
     simplification_start: float | None = None
     _send(connection, {'kind': 'started'})
@@ -303,6 +304,7 @@ def _benchmark_worker(problem: str, convert_only: bool,
         manager = environment.formula_manager
         script = SmtLibParser(environment=environment).get_script_fname(problem)
         pysmt_formula = script.get_strict_formula(manager)
+        smtlib_atoms = len(pysmt_formula.get_atoms())
         smtlib_variables = {}
         for variable in pysmt_formula.get_free_variables():
             type_name = str(variable.symbol_type())
@@ -313,6 +315,7 @@ def _benchmark_worker(problem: str, convert_only: bool,
         _send(connection, {
             'kind': 'phase',
             'phase': phase,
+            'smtlib_atoms': smtlib_atoms,
             'smtlib_variables': smtlib_variables,
         })
         formula = Formula.from_smtlib(pysmt_formula)
@@ -325,6 +328,7 @@ def _benchmark_worker(problem: str, convert_only: bool,
                 'phase': 'convert',
                 'runtime_seconds': perf_counter() - total_start,
                 'simplification_runtime_seconds': None,
+                'smtlib_atoms': smtlib_atoms,
                 'smtlib_variables': smtlib_variables,
                 'atoms_before': atoms_before,
                 'atoms_after': None,
@@ -350,6 +354,7 @@ def _benchmark_worker(problem: str, convert_only: bool,
             'phase': 'complete',
             'runtime_seconds': perf_counter() - total_start,
             'simplification_runtime_seconds': simplification_runtime,
+            'smtlib_atoms': smtlib_atoms,
             'smtlib_variables': smtlib_variables,
             'atoms_before': atoms_before,
             'atoms_after': atoms_after,
@@ -365,6 +370,7 @@ def _benchmark_worker(problem: str, convert_only: bool,
             'phase': phase,
             'runtime_seconds': perf_counter() - total_start,
             'simplification_runtime_seconds': simplification_runtime,
+            'smtlib_atoms': smtlib_atoms,
             'smtlib_variables': smtlib_variables,
             'atoms_before': atoms_before,
             'atoms_after': None,
@@ -391,6 +397,7 @@ def _record(instance: Instance, **values: Any) -> dict[str, Any]:
         'family': instance.family,
         'problem': instance.problem,
         'smtlib': {
+            'atoms': values.pop('smtlib_atoms', None),
             'variables': values.pop('smtlib_variables', None),
         },
         **values,
@@ -406,6 +413,7 @@ class _RunningInstance:
     deadline: float
     phase: str = 'startup'
     atoms_before: int | None = None
+    smtlib_atoms: int | None = None
     smtlib_variables: dict[str, int] | None = None
     prepared_elapsed: float | None = None
     run_start: float | None = None
@@ -460,6 +468,7 @@ def _timeout_result(run: _RunningInstance, now: float) -> dict[str, Any]:
         phase=run.phase,
         runtime_seconds=elapsed,
         simplification_runtime_seconds=simplification_runtime,
+        smtlib_atoms=run.smtlib_atoms,
         smtlib_variables=run.smtlib_variables,
         atoms_before=run.atoms_before,
         atoms_after=None,
@@ -478,6 +487,7 @@ def _worker_error_result(run: _RunningInstance, now: float) -> dict[str, Any]:
         phase=run.phase,
         runtime_seconds=now - start,
         simplification_runtime_seconds=None,
+        smtlib_atoms=run.smtlib_atoms,
         smtlib_variables=run.smtlib_variables,
         atoms_before=run.atoms_before,
         atoms_after=None,
@@ -497,6 +507,7 @@ def _handle_message(run: _RunningInstance, message: Any,
         run.deadline = run.run_start + timeout_seconds
     elif kind == 'phase':
         run.phase = message['phase']
+        run.smtlib_atoms = message.get('smtlib_atoms')
         run.smtlib_variables = message.get('smtlib_variables')
     elif kind == 'prepared':
         run.phase = 'simplify'
