@@ -77,16 +77,12 @@ jobs:
         target:
           - name: linux-x64
             os: ubuntu-24.04
-            arch: x86_64
           - name: linux-arm64
             os: ubuntu-24.04-arm
-            arch: aarch64
           - name: macos-x64
             os: macos-15-intel
-            arch: x86_64
           - name: macos-arm64
             os: macos-15
-            arch: arm64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -111,7 +107,12 @@ jobs:
 
       - name: Build wheel
         env:
-          CIBW_ARCHS: ${{ matrix.target.arch }}
+          CIBW_ARCHS: >-
+            ${{ case(
+              runner.os == 'Linux' && runner.arch == 'ARM64', 'aarch64',
+              runner.os == 'macOS' && runner.arch == 'ARM64', 'arm64',
+              'x86_64'
+            ) }}
           CIBW_BEFORE_ALL_LINUX: yum install --assumeyes gmp-devel
           CIBW_BUILD: ${{ matrix.python.selector }}
           CIBW_BUILD_VERBOSITY: 1
