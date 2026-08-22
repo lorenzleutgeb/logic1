@@ -1,8 +1,9 @@
-"""Benchmark the Logic1 RCF simplifier on SMT-LIB QF_NRA problems.
+"""Benchmark the Logic1 RCF simplifier on SMT-LIB problems.
 
 Run this module from a Logic1 source checkout, for example::
 
     python -m logic1.theories.RCF.smtlib.benchmark 'Pine:1,ezsmt:-20,Geo'
+    python -m logic1.theories.RCF.smtlib.benchmark --logic=QF_NRA all
     python -m logic1.theories.RCF.smtlib.benchmark --convert-only all
 
 The selected instances are processed concurrently.  Each instance runs in a
@@ -29,7 +30,9 @@ from typing import Any, Callable, cast, Iterator, Sequence, TypeVar
 
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
-DEFAULT_BENCHMARK_ROOT = Path(__file__).resolve().parents[4] / 'smtlib' / 'QF_NRA'
+DEFAULT_LOGIC = 'QF_NRA'
+DEFAULT_BENCHMARK_BASE = Path(__file__).resolve().parents[4] / 'smtlib'
+DEFAULT_BENCHMARK_ROOT = DEFAULT_BENCHMARK_BASE / DEFAULT_LOGIC
 
 _DATE_PREFIX = re.compile(r'^\d+-')
 _NATURAL_PART = re.compile(r'(\d+)')
@@ -71,6 +74,16 @@ def friendly_family_name(directory_name: str) -> str:
     """Remove the optional SMT-LIB date prefix from a family directory."""
 
     return _DATE_PREFIX.sub('', directory_name, count=1)
+
+
+def benchmark_root(logic: str) -> Path:
+    """Return the corpus directory for one SMT-LIB logic."""
+
+    component = Path(logic)
+    if not logic or component.is_absolute() or len(component.parts) != 1 \
+            or logic in {'.', '..'}:
+        raise SelectionError(f'invalid SMT-LIB logic: {logic!r}')
+    return DEFAULT_BENCHMARK_BASE / logic
 
 
 def _natural_key(value: str) -> tuple[tuple[int, int | str], ...]:
@@ -213,7 +226,7 @@ def _select_families(selector: str, families: Sequence[_FamilyT]) \
 
 def _instances_from_families(
         selected: Sequence[tuple[Family, str | None]],
-        root: Path) -> tuple[Instance, ...]:
+        root: Path, logic: str) -> tuple[Instance, ...]:
     selected_problems: list[tuple[Family, Sequence[Path]]] = []
     for family, range_specification in selected:
         if range_specification is None:
@@ -228,20 +241,22 @@ def _instances_from_families(
         Instance(
             family=family.name,
             path=path.resolve(),
-            problem=path.relative_to(root).as_posix())
+            problem=(Path(logic) / path.relative_to(root)).as_posix())
         for family, problems in selected_problems
         for path in problems)
 
 
 def select_instances(selector: str, families: Sequence[Family],
-                     root: Path) -> tuple[Instance, ...]:
+                     root: Path, logic: str = DEFAULT_LOGIC) \
+        -> tuple[Instance, ...]:
     """Resolve ``selector`` among already discovered ``families``."""
 
     return _instances_from_families(
-        _select_families(selector, families), root)
+        _select_families(selector, families), root, logic)
 
 
-def discover_instances(selector: str, root: Path) -> tuple[Instance, ...]:
+def discover_instances(selector: str, root: Path,
+                       logic: str = DEFAULT_LOGIC) -> tuple[Instance, ...]:
     """Discover problems only in the families selected by ``selector``."""
 
     families = _discover_family_directories(root)
@@ -249,7 +264,7 @@ def discover_instances(selector: str, root: Path) -> tuple[Instance, ...]:
     discovered = [
         (_discover_problems(family), range_specification)
         for family, range_specification in selected]
-    return _instances_from_families(discovered, root)
+    return _instances_from_families(discovered, root, logic)
 
 
 def _send(connection: Connection, message: dict[str, Any]) -> None:
@@ -577,20 +592,25 @@ def benchmark_instance(instance: Instance, timeout_seconds: float,
         [instance], timeout_seconds, convert_only, context=context))
 
 
-def run_benchmarks(selector: str, root: Path = DEFAULT_BENCHMARK_ROOT,
+def run_benchmarks(selector: str, root: Path | None = None,
                    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                    convert_only: bool = False,
                    workers: int | None = None,
+                   logic: str = DEFAULT_LOGIC,
                    on_start: Callable[[dict[str, Any]], None] | None = None,
                    on_result: Callable[[dict[str, Any]], None] | None = None) \
         -> dict[str, Any]:
     """Select and concurrently benchmark a QF_NRA suite."""
 
-    instances = discover_instances(selector, root)
+    expected_root = benchmark_root(logic)
+    if root is None:
+        root = expected_root
+    instances = discover_instances(selector, root, logic)
     if workers is None:
         workers = benchmark_worker_count()
     metadata = {
         'selector': selector,
+        'logic': logic,
         'timeout_seconds': timeout_seconds,
         'convert_only': convert_only,
         'workers': workers,
@@ -621,7 +641,11 @@ def _write_json_line(record: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description='Benchmark Logic1 RCF simplification on QF_NRA SMT-LIB files.')
+        description='Benchmark Logic1 RCF simplification on SMT-LIB files.')
+    parser.add_argument(
+        '--logic',
+        default=DEFAULT_LOGIC,
+        help=f'SMT-LIB logic directory (default: {DEFAULT_LOGIC})')
     parser.add_argument(
         'selector',
         help="suite selector such as 'Pine:1,ezsmt:-20,Geo' or 'all'")
@@ -635,6 +659,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_benchmarks(
             arguments.selector,
             convert_only=arguments.convert_only,
+            logic=arguments.logic,
             on_start=lambda metadata: _write_json_line({
                 'type': 'metadata',
                 **metadata,

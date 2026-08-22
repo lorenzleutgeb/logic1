@@ -104,6 +104,19 @@ def test_discover_instances_only_traverses_selected_families(
         'Sturm-MBO', 'Sturm-MGC'}
 
 
+def test_problem_path_includes_logic(benchmark_root: Path) -> None:
+    selected = benchmark.discover_instances(
+        'Pine:1', benchmark_root, logic='QF_LRA')
+
+    assert selected[0].problem == 'QF_LRA/20200911-Pine/problem1.smt2'
+
+
+@pytest.mark.parametrize('logic', ['', '.', '..', '../QF_NRA', '/QF_NRA'])
+def test_invalid_logic(logic: str) -> None:
+    with pytest.raises(benchmark.SelectionError):
+        benchmark.benchmark_root(logic)
+
+
 @pytest.mark.parametrize('selector', [
     '',
     'unknown',
@@ -153,11 +166,12 @@ def test_success_and_conversion_error_continue(
         on_result=lambda _: callback_pids.append(os.getpid()))
 
     assert report['timeout_seconds'] == 10.0
+    assert report['logic'] == 'QF_NRA'
     assert report['workers'] == 2
     assert callback_pids == [coordinator_pid, coordinator_pid]
     by_problem = {result['problem']: result for result in report['results']}
-    first = by_problem['20200101-Demo/problem1.smt2']
-    second = by_problem['20200101-Demo/problem2.smt2']
+    first = by_problem['QF_NRA/20200101-Demo/problem1.smt2']
+    second = by_problem['QF_NRA/20200101-Demo/problem2.smt2']
     assert first['status'] == 'error'
     assert first['phase'] == 'convert'
     assert first['error']['type'] == 'NotImplementedError'
@@ -174,8 +188,8 @@ def test_success_and_conversion_error_continue(
     assert captured.out == ''
     assert len(progress) == 2
     assert {line.split('] ', 1)[1].split(': ', 1)[0] for line in progress} == {
-        '20200101-Demo/problem1.smt2',
-        '20200101-Demo/problem2.smt2'}
+        'QF_NRA/20200101-Demo/problem1.smt2',
+        'QF_NRA/20200101-Demo/problem2.smt2'}
 
 
 def test_worker_count_reserves_two_cores(
@@ -314,6 +328,7 @@ def test_convert_only_stops_before_simplification(tmp_path: Path) -> None:
         'Demo:1', root, timeout_seconds=10.0, convert_only=True, workers=1)
 
     assert report['convert_only'] is True
+    assert report['logic'] == 'QF_NRA'
     assert report['workers'] == 1
     result = report['results'][0]
     assert result['status'] == 'ok'
@@ -325,35 +340,50 @@ def test_convert_only_stops_before_simplification(tmp_path: Path) -> None:
     assert result['error'] is None
 
 
-def test_main_streams_json_lines(monkeypatch: pytest.MonkeyPatch,
-                                 capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(('logic_arguments', 'logic'), [
+    ([], 'QF_NRA'),
+    (['--logic=QF_NRA'], 'QF_NRA'),
+    (['--logic=QF_LRA'], 'QF_LRA'),
+])
+def test_main_streams_json_lines(
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        logic_arguments: list[str], logic: str) -> None:
     metadata: dict[str, Any] = {
         'selector': 'Pine:1',
+        'logic': logic,
         'timeout_seconds': 30.0,
         'convert_only': True,
         'workers': 6,
     }
     result = {
         'family': 'Pine',
-        'problem': '20200911-Pine/problem1.smt2',
+        'problem': f'{logic}/20200911-Pine/problem1.smt2',
         'status': 'ok',
     }
 
     def fake_run(
             selector: str, *, convert_only: bool = False,
+            logic: str = benchmark.DEFAULT_LOGIC,
             on_start: Any = None, on_result: Any = None) -> dict[str, Any]:
         current_metadata = {
             **metadata,
             'selector': selector,
+            'logic': logic,
             'convert_only': convert_only,
         }
+        current_result = {
+            **result,
+            'problem': f'{logic}/20200911-Pine/problem1.smt2',
+        }
         on_start(current_metadata)
-        on_result(result)
-        return {**current_metadata, 'results': [result]}
+        on_result(current_result)
+        return {**current_metadata, 'results': [current_result]}
 
     monkeypatch.setattr(benchmark, 'run_benchmarks', fake_run)
 
-    assert benchmark.main(['--convert-only', 'Pine:1']) == 0
+    assert benchmark.main([
+        '--convert-only', *logic_arguments, 'Pine:1']) == 0
     captured = capsys.readouterr()
     lines = [json.loads(line) for line in captured.out.splitlines()]
     assert lines == [
@@ -366,6 +396,7 @@ def test_main_streams_json_lines(monkeypatch: pytest.MonkeyPatch,
 def test_main_reports_selection_error(monkeypatch: pytest.MonkeyPatch,
                                       capsys: pytest.CaptureFixture[str]) -> None:
     def fail(selector: str, *, convert_only: bool = False,
+             logic: str = benchmark.DEFAULT_LOGIC,
              on_start: Any = None, on_result: Any = None) -> dict[str, Any]:
         raise benchmark.SelectionError(f'bad selector: {selector}')
 
