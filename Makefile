@@ -46,6 +46,15 @@ ign_too_slow     := --ignore=logic1/theories/RCF/test_gsimplify_motor.txt \
 
 ignores := $(ign_other_backend) $(ign_too_slow)
 
+reduce := $(shell echo "quit;" | redcsl -w &>/dev/null; echo $$?)
+
+ifeq ($(reduce), 0)
+  $(info Executing Reduce succeeded, will run tests with Redlog)
+else
+  $(info Executing Reduce failed with exit code $(reduce), will skip tests with Redlog)
+  ignores += $(ign_redlog)
+endif
+
 .PHONY: cython cython-clean cython-html \
         pytest pytest-run pytest-fast pytest-seq pytest-full pytest-full-seq \
         test-doc mypy mypy-run mypy_noinc test test-all doc pygount \

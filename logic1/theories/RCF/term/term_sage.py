@@ -34,18 +34,17 @@ POLYLIB: Final = "SAGE"
 
 
 τ = TypeVar('τ', bound='Term')
-"""A type variable denoting a type of terms with upper bound
-:class:`logic1.theories.RCF.Term`.
+"""A type variable denoting a type of terms with upper bound :class:`Term`.
 """
 
 CACHE_SIZE: Final[Optional[int]] = 2**16
 
 
 def _caches():
-    from logic1.theories.RCF.node import XoNode
+    from logic1.theories.RCF.node.xopt import Node
     from logic1.theories.RCF.simplify import Simplify
     from logic1.theories.RCF.substitution import _SubstValue
-    return [Term.factor, _SubstValue.as_term, Simplify._simpl_at, XoNode.subs_into_formula]
+    return [Term.factor, _SubstValue.as_term, Simplify._simpl_at, Node.subs_into_formula]
 
 def cache_clear():
     for cache in _caches():
@@ -131,12 +130,15 @@ class VariableSet(firstorder.VariableSet['Variable']):
     :external:class:`.str`. This class is a singleton, whose single instance is
     assigned to :data:`.VV`.
 
-    .. seealso::
-        Final methods inherited from parent class:
+    The use of :data:`.VV` for the construction of terms, atoms, and formulas is
+    described in the introduction of the section :ref:`Real Closed Fields <api-RCF>`.
 
-        * :meth:`.firstorder.atomic.VariableSet.get`
+    .. seealso::
+        Final methods inherited from the parent class:
+
+        * :meth:`.firstorder.term.VariableSet.get`
             -- obtain several variables simultaneously
-        * :meth:`.firstorder.atomic.VariableSet.imp`
+        * :meth:`.firstorder.term.VariableSet.imp`
             -- import variables into global namespace
     """
 
@@ -144,14 +146,19 @@ class VariableSet(firstorder.VariableSet['Variable']):
 
     @property
     def stack(self) -> list[MPolynomialRing]:
-        """Implements abstract property
-        :attr:`.firstorder.atomic.VariableSet.stack`.
+        """Implements the abstract property :attr:`.firstorder.term.VariableSet.stack`.
         """
         return self.polynomial_ring.stack
 
     def __getitem__(self, index: str) -> Variable:
-        """Implements abstract method
-        :meth:`.firstorder.atomic.VariableSet.__getitem__`.
+        """Implements the abstract method :meth:`.firstorder.term.VariableSet.__getitem__`.
+
+        >>> from logic1.theories.RCF import VV
+        >>> isinstance(VV, VariableSet)
+        True
+        >>> x = VV['x']
+        >>> isinstance(x, Variable)
+        True
         """
         match index:
             case str():
@@ -168,8 +175,14 @@ class VariableSet(firstorder.VariableSet['Variable']):
     def fresh(self, suffix: str = '') -> Variable:
         """Return a fresh variable, by default from the sequence G0001, G0002,
         ..., G9999, G10000, ... This naming convention is inspired by Lisp's
-        gensym(). If the optional argument :data:`suffix` is specified, the
+        gensym(). If the optional argument :code:`suffix` is specified, the
         sequence G0001<suffix>, G0002<suffix>, ... is used instead.
+
+        >>> from logic1.theories.RCF import VV
+        >>> VV.fresh('_demo')
+        G0001_demo
+        >>> VV.fresh('_demo')
+        G0002_demo
         """
         vars_ = set(str(g) for g in self.polynomial_ring.get_vars())
         i = 1
@@ -206,7 +219,7 @@ class DEFINITE(Enum):
     # This is an ordered Enum, the order of the following properties should not
     # be changed.
     UNKNOWN = auto()
-    """It has not been derived that any the other cases holds.
+    """Heuristic tests could not derive that any the other cases holds.
     """
 
     ZERO = auto()
@@ -303,10 +316,12 @@ class DEFINITE(Enum):
         NEGATIVE_SEMI + NEGATIVE_SEMI = NEGATIVE_SEMI
 
         This addition is commutative:
+
         >>> all(DEFINITE.add(x, y) is DEFINITE.add(y, x) for x in l for y in l)
         True
 
-        DEFINITE.zero is a (unique) neutral element:
+        :attr:`DEFINITE.ZERO` is a (unique) neutral element:
+
         >>> all(DEFINITE.add(x, DEFINITE.ZERO) is x for x in l)
         True
         """
@@ -334,7 +349,7 @@ class DEFINITE(Enum):
 
     @staticmethod
     def from_constant(q: int | mpq | Rational) -> DEFINITE:
-        """Compute DEFINITE of a number.
+        """Compute :class:`DEFINITE` of a number.
 
         >>> print(DEFINITE.from_constant(mpq(42)))
         DEFINITE.POSITIVE
@@ -355,11 +370,12 @@ class DEFINITE(Enum):
 
     @staticmethod
     def mul(x: DEFINITE, y: DEFINITE) -> DEFINITE:
-        """Compute DEFINITE of a product from DEFINITE of the factors.
+        """Compute :class:`DEFINITE` of a product from :class:`DEFINITE` of the factors.
 
         >>> l = list(DEFINITE)
 
         The multiplication table:
+
         >>> for x in l:
         ...     for y in l:
         ...             print(f'{x.name} * {y.name} = {DEFINITE.mul(x,y).name}')
@@ -402,10 +418,12 @@ class DEFINITE(Enum):
         NEGATIVE_SEMI * NEGATIVE_SEMI = POSITIVE_SEMI
 
         This multiplication is commutative:
+
         >>> all(DEFINITE.mul(x, y) is DEFINITE.mul(y, x) for x in l for y in l)
         True
 
-        DEFINITE.POSITIVE is a (unique) neutral element:
+        :attr:`DEFINITE.POSITIVE` is a (unique) neutral element:
+
         >>> all(DEFINITE.mul(x, DEFINITE.POSITIVE) is x for x in l)
         True
         """
@@ -434,6 +452,8 @@ class DEFINITE(Enum):
 
     @staticmethod
     def square(x: DEFINITE) -> DEFINITE:
+        """Compute :class:`DEFINITE` of a square.
+        """
         if x is DEFINITE.UNKNOWN:
             return DEFINITE.POSITIVE_SEMI
         return DEFINITE.mul(x, x)
@@ -441,6 +461,13 @@ class DEFINITE(Enum):
 
 @dataclass
 class SortKey(Generic[τ]):
+    """
+    Sort key for comparing terms.
+
+    >>> x = VV['x']
+    >>> SortKey(x) < SortKey(x + 1)
+    True
+    """
 
     term: τ
 
@@ -509,7 +536,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
     def __eq__(self, other: Term | int) -> Eq:  # type: ignore[override]
         # MyPy requires "other: object". However, with our use a a constructor,
         # it makes no sense to compare terms with general objects. We have
-        # Eq.__bool__, which supports some comparisons in boolean contexts.
+        # Eq.__bool__, which supports some comparisons in Boolean contexts.
         # Same for __ne__.
         lhs = self - other
         # Use poly.lc() in order to support @lru_cache on Term.lc().
@@ -542,8 +569,41 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         self._poly = state["_poly"]
         self._hash = None
 
-    def __init__(self, arg: float | Fraction | int | Integer | MPolynomial[Rational]
-                 | mpq | Rational | UPolynomial) -> None:
+    def __init__(self, arg: float | int | Fraction | mpq |
+                       Integer | Rational | MPolynomial[Rational] | UPolynomial) -> None:
+        """Construct a :class:`Term` from :class:`.float`, :class:`.int`,
+        :class:`Fraction <fractions.Fraction>`, or :class:`mpq <gmpy2.mpq>`.
+        Arguments of the following types are private and should not be used outside of this module:
+        :class:`Integer <.sage.rings.integer.Integer>`,
+        :class:`Rational <.sage.rings.rational.Rational>`,
+        :class:`MPolynomial[Rational] <.sage.rings.polynomial.multi_polynomial_libsingular.MPolynomial_libsingular>`,
+        :class:`UPolynomial <.sage.rings.polynomial.polynomial_element.Polynomial_generic_dense>`.
+
+        >>> from logic1.theories.RCF import Term
+        >>> Term(0.1 + 0.2)
+        415716888680356/1385722962267853
+        >>> Term(42)
+        42
+        >>> Term(Fraction(1, 42))
+        1/42
+        >>> Term(mpq(1, 42))
+        1/42
+
+        .. attention::
+            Python division of integers yields a float, which can cause
+            precision issues:
+
+            >>> Term(1/10 + 2/10)
+            415716888680356/1385722962267853
+
+            In contrast:
+
+            >>> Term(mpq(1, 10) + mpq(2, 10))
+            3/10
+            >>> Term(Fraction(1, 10) + Fraction(2, 10))
+            3/10
+
+        """
         if isinstance(arg, MPolynomial):
             self._poly = arg
         elif isinstance(arg, (float | Fraction, int, Integer, mpq, Rational, UPolynomial)):
@@ -620,6 +680,14 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return Term(other - self.poly)
 
     def __str__(self):
+        """Return the mathematical string representation of this term.
+
+        >>> from logic1.theories.RCF import VV
+        >>> x, y = VV.get('x', 'y')
+        >>> t = (x - y + 2) ** 2
+        >>> str(t)
+        'x^2 - 2*x*y + y^2 + 4*x - 4*y + 4'
+        """
         return str(self.poly)
 
     def __sub__(self, other: object) -> Term:
@@ -644,12 +712,34 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
             "in Python, and has the wrong precedence")
 
     def as_constant(self) -> mpq:
-        assert self.is_constant()
+        """Return this term as an :class:`mpq <.gmpy2.mpq>`.
+        Raise :class:`ValueError` if this term is not constant.
+
+        >>> from logic1.theories.RCF import VV
+        >>> x = VV['x']
+        >>> t = x + mpq(1, 2) - x
+        >>> t
+        1/2
+        >>> isinstance(t, Term)
+        True
+        >>> isinstance(t, mpq)
+        False
+        >>> c = t.as_constant()
+        >>> c
+        mpq(1,2)
+        >>> isinstance(c, mpq)
+        True
+
+        .. seealso::
+            :meth:`.Term.is_constant`
+        """
+        if not self.is_constant():
+            raise ValueError(f'{self} is not constant')
         return self.constant_coefficient()
 
     def as_latex(self) -> str:
         """LaTeX representation as a string. Implements the abstract method
-        :meth:`.firstorder.atomic.Term.as_latex`.
+        :meth:`.firstorder.term.Term.as_latex`.
 
         >>> from logic1.theories.RCF import VV
         >>> x, y = VV.get('x', 'y')
@@ -660,6 +750,27 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return str(sage_latex(self.poly))
 
     def as_variable(self) -> Variable:
+        """Return this term as an instance of the subclass :class:`.Variable`.
+        Raise :class:`ValueError` if this term is not a variable.
+
+        >>> from logic1.theories.RCF import VV
+        >>> x = VV['x']
+        >>> t = x + 1 - 1
+        >>> t
+        x
+        >>> isinstance(t, Term)
+        True
+        >>> isinstance(t, Variable)
+        False
+        >>> v = t.as_variable()
+        >>> v
+        x
+        >>> isinstance(v, Variable)
+        True
+
+        .. seealso::
+            :meth:`.Term.is_variable`
+        """
         if not self.is_variable():
             raise ValueError(f'{self} is not a variable')
         return Variable(self.poly)
@@ -750,20 +861,18 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     @lru_cache(maxsize=CACHE_SIZE)
     def factor(self) -> tuple[mpq, dict[Term, int]]:
-        """A polynomial factorization of this term.
-
-        :returns: A pair `(unit, D)`, where `unit` is a rational number, the
-          keys of `D` are irreducible factors, and the corresponding values are
-          their multiplicities. All irreducible factors are monic. Note that
-          the return value is uniquely determined by this specification.
+        """A polynomial factorization of this term. Returns a pair `(unit, D)`,
+        where `unit` is a rational number, the keys of `D` are irreducible
+        factors, and the corresponding values are their multiplicities. All
+        irreducible factors are monic. Note that the return value is uniquely
+        determined by this specification.
 
         >>> x, y = VV.get('x', 'y')
         >>> t = -x**2 + y**2
         >>> t.factor() == (mpq(-1,1), {x - y: 1, x + y: 1})
         True
 
-        It is noteworthy that Sage factorization over QQ does not always yield
-        monic factors.
+        It is noteworthy that Sage factorization over :external:class:`QQ <sage.rings.rational_field.RationalField>` does not always yield monic factors.
 
         >>> a, b = VV.get('a', 'b')
         >>> t = 2*a**2 + 4*a*b + 2*b**2 - 1
@@ -818,11 +927,23 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return gbasis_terms
 
     def is_constant(self) -> bool:
-        """Return :obj:`True` if this term is constant.
+        """Return :obj:`True` if this term is constant from a mathematical
+        perspective.
+
+        >>> from logic1.theories.RCF import VV
+        >>> x = VV['x']
+        >>> t = x + mpq(1, 2) - x
+        >>> t
+        1/2
+        >>> isinstance(t, mpq)
+        False
+        >>> t.is_constant()
+        True
 
         .. seealso::
-            :external:meth:`MPolynomial_libsingular.is_constant()
-            <sage.rings.polynomial.multi_polynomial_libsingular.MPolynomial_libsingular.is_constant>`
+            - :meth:`.as_constant`
+            - :external:meth:`MPolynomial_libsingular.is_constant()
+              <sage.rings.polynomial.multi_polynomial_libsingular.MPolynomial_libsingular.is_constant>`
         """
         return self.poly.is_constant()
 
@@ -875,7 +996,21 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return self.poly.is_monomial()
 
     def is_variable(self) -> bool:
-        """Return :obj:`True` if this term is a variable.
+        """Return :obj:`True` if this term is a variable from a mathematical
+        perspective.
+
+        >>> from logic1.theories.RCF import VV
+        >>> x = VV['x']
+        >>> t = x + 1 - 1
+        >>> isinstance(t, Term)
+        True
+        >>> isinstance(t, Variable)
+        False
+        >>> t.is_variable()
+        True
+
+        .. seealso::
+            :meth:`.as_variable`
         """
         try:
             return self.poly.is_gen()
@@ -883,9 +1018,11 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
             return self.poly.is_generator()
 
     def is_weakly_parametric_linear(self, X: Container[Variable]) -> bool:
-        """Return :obj:`True` if this Term can be written as a_1 x_1 + ... +
-        a_n x_n + r such that a_1, ..., a_n in QQ, x_1, ..., x_n in X, and r is
-        a polynomial over QQ that does not contain any variable from X.
+        r"""Return :obj:`True` if this Term can be written as
+        :math:`a_1 x_1 + ... + a_n x_n + r` such that :math:`a_1, ..., a_n \in
+        \mathbb{Q}`, :math:`x_1, ..., x_n \in X`, and :math:`r` is a polynomial
+        over :math:`\mathbb{Q}` that does not contain any variable from
+        :math:`X`.
 
         >>> a, b, x, y = VV.get('a', 'b', 'x', 'y')
         >>> term = 2 * x - 3 * y + 4 * a**2 + 5 * a * b
@@ -905,7 +1042,19 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return True
 
     def is_zero(self) -> bool:
-        """Return :obj:`True` if this term is a zero.
+        """Return :obj:`True` if this term is zero.
+
+        >>> from logic1.theories.RCF import VV
+        >>> x = VV['x']
+        >>> t = x - x
+        >>> t
+        0
+        >>> isinstance(t, Term)
+        True
+        >>> isinstance(t, int)
+        False
+        >>> t.is_zero()
+        True
 
         .. seealso::
             :external:meth:`MPolynomial_libsingular.is_zero()
@@ -915,9 +1064,8 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     @lru_cache(maxsize=CACHE_SIZE)
     def lc(self) -> mpq:
-        """Leading coefficient of this term with respect to the degree
-        lexicographical term order :mod:`deglex
-        <sage.rings.polynomial.term_order>`.
+        """Return the leading coefficient of this term with respect to the
+        degree lexicographical term order :mod:`deglex <sage.rings.polynomial.term_order>`.
 
         >>> from logic1.theories.RCF import VV
         >>> x, y = VV.get('x', 'y')
@@ -932,8 +1080,9 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return mpq(self.poly.lc())
 
     def monomial_coefficient(self, mon: Term) -> mpq:
-        """Return the coefficient in the base ring of the monomial mon in self,
-        where mon must have the same parent as self.
+        """Return the coefficient in the base ring of the monomial ``mon`` in
+        ``self``, where ``mon`` must have the same parent as ``self``. Raise
+        :class:`ValueError` if ``mon`` is not a monomial.
 
         .. seealso::
             :external:meth:`MPolynomial_libsingular.monomial_coefficient()
@@ -944,8 +1093,8 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return mpq(self.poly.monomial_coefficient(mon.poly))
 
     def monomials(self) -> list[Term]:
-        """List of monomials of this term. A monomial is defined here as a
-        summand of a polynomial *without* the coefficient.
+        """Return a list of all monomials of this term. A monomial is defined
+        here as a summand of a polynomial *without* the coefficient.
 
         >>> from logic1.theories.RCF import VV
         >>> x, y = VV.get('x', 'y')
@@ -961,14 +1110,16 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     @lru_cache(maxsize=CACHE_SIZE)
     def normalize(self) -> Term:
+        """Divide this term by its leading coefficient, so that the result is monic.
+        """
         return Term(self.poly / self.poly.lc())
 
     @lru_cache(maxsize=CACHE_SIZE)
     def primitive_part(self, positive: bool = False) -> Term:
-        """Return the primitive part over ``Z``. This is ``self`` divided by its
-        (positive) content, so that ``self.content() * self.primitive_part() ==
-        self``. If ``positive`` is ``True``, the result is normalized to have a
-        positive leading coefficient.
+        """Return the primitive part of this term. This is ``self`` divided by
+        its (positive) content, so that ``self.content() * self.primitive_part()
+        == self``. If ``positive`` is ``True``, the result is normalized to have
+        a positive leading coefficient.
         """
         pp = self / self.content()
         if positive and pp.lc() < 0:
@@ -991,6 +1142,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
             :meth:`Polynomial.pseudo_quo_rem()
             <sage.rings.polynomial.polynomial_element.Polynomial.pseudo_quo_rem>`
         """
+        # self, other, quotient are of type UPolynomial
         self1 = self.poly.polynomial(self.polynomial_ring(x.poly))
         other1 = other.poly.polynomial(self.polynomial_ring(x.poly))
         quotient, remainder = self1.pseudo_quo_rem(other1)
@@ -1017,25 +1169,35 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return Term(quo), Term(rem)
 
     def reduce(self, G: Iterable[Term]) -> Term:
-        """Reduce self modulo G.
+        """Reduce self modulo G. The output is a polynomial ``r`` such that
+        ``self - r`` is in the ideal generated by ``G``, and no monomial of
+        ``r`` is divisible by the leading monomial of any polynomial in ``G``.
+        The result is canonical if ``G`` is a Gröbner basis.
+
+        The elements of G must be coercible to the parent of self. Otherwise,
+        a :class:`TypeError` is raised.
+
+        .. seealso::
+            :external:meth:`MPolynomial_libsingular.reduce()
+            <sage.rings.polynomial.multi_polynomial_libsingular.MPolynomial_libsingular.reduce>`
         """
-        # Sage requires that g.poly can be coerced to self.poly.parent().
         poly = self.polynomial_ring(self.poly).reduce([g.poly for g in G])
         return Term(poly)
 
     def sort_key(self) -> SortKey[Self]:
         """A sort key suitable for ordering instances of this class. Implements
-        the abstract method :meth:`.firstorder.atomic.Term.sort_key`.
+        the abstract method :meth:`.firstorder.term.Term.sort_key`.
         """
         return SortKey(self)
 
-    def subs(self, d: Mapping[Variable, Term | int | mpq]) -> Term:
+    def subs(self, d: Mapping[Variable, Term | int | mpq | Fraction | float]) -> Term:
         """Simultaneous substitution of terms for variables.
 
         >>> from logic1.theories.RCF import VV
         >>> x, y, z = VV.get('x', 'y', 'z')
-        >>> f = 2*y*x**2 + x + 1
-        >>> f.subs({x: y, y: 2*z})
+        >>> (x + y).subs({x: mpq(1,2)})
+        y + 1/2
+        >>> (2*y*x**2 + x + 1).subs({x: y, y: 2*z})
         4*y**2*z + y + 1
 
         .. seealso::
@@ -1044,20 +1206,23 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         """
         sage_keywords: dict[str, MPolynomial[Rational] | int | mpq] = dict()
         for variable, substitute in d.items():
-            match substitute:
-                case Term():
-                    sage_keywords[str(variable.poly)] = substitute.poly
-                case int() | mpq():
-                    sage_keywords[str(variable.poly)] = substitute
-                case _:
-                    assert False, (self, d)
+            if not isinstance(substitute, Term):
+                substitute = Term(substitute)
+            sage_keywords[str(variable.poly)] = substitute.poly
         return Term(self.polynomial_ring(self.poly).subs(**sage_keywords))
 
     @lru_cache(maxsize=CACHE_SIZE)
     def subs_linear_solution(self, x: Variable, minimal_polynomial: Term) -> Term:
-        """Substitute the solution of the weakly parametric linear
-        polynomial ``minimal_polynomial`` this weakly parametric linear
-        polynomial.
+        """Substitute the solution of the weakly parametric linear polynomial
+        ``minimal_polynomial`` into this weakly parametric linear polynomial.
+
+        >>> from logic1.theories.RCF import VV
+        >>> a, b, x = VV.get('a', 'b', 'x')
+        >>> (2 * x + a).subs_linear_solution(x, 5 * x + b)
+        a - 2/5*b
+
+        It is asserted that both polynomials are weakly parametric linear in
+        ``x``, but no exception is raised if this is not the case.
         """
         # self = a * x + b
         a = self.monomial_coefficient(x)
@@ -1071,8 +1236,18 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
         return result
 
     def summands(self) -> Iterator[tuple[dict[Variable, int], mpq]]:
-        """Iterate over the summands of self yielding pairs of dictionaries
-        representing monomials, and coefficients.
+        """Iterate over the summands of this term yielding pairs of monomials
+        represented as dictionaries and coefficients.
+
+        >>> from logic1.theories.RCF import VV
+        >>> a, b, c = VV.get('a', 'b', 'c')
+        >>> f = a*c**3 + a**2*b + 2*b**4
+        >>> list(f.summands())
+        [({a: 1, c: 3}, mpq(1,1)), ({b: 4}, mpq(2,1)), ({a: 2, b: 1}, mpq(1,1))]
+
+        .. seealso::
+            :external:meth:`MPolynomial_libsingular.iterator_exp_coeff()
+            <sage.rings.polynomial.multi_polynomial_libsingular.MPolynomial_libsingular.iterator_exp_coeff>`
         """
         gens = self.polynomial_ring.sage_ring.gens()
         for etuple, coefficient in self.poly.iterator_exp_coeff(as_ETuples=True):
@@ -1084,7 +1259,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     def vars(self) -> Iterator[Variable]:
         """An iterator that yields each variable of this term once. Implements
-        the abstract method :meth:`.firstorder.atomic.Term.vars`.
+        the abstract method :meth:`.firstorder.term.Term.vars`.
 
         .. seealso::
             :external:meth:`MPolynomial_libsingular.variables()
@@ -1100,6 +1275,6 @@ class Variable(Term, firstorder.Variable['Variable', int, SortKey['Variable']]):
 
     def fresh(self) -> Variable:
         """Returns a variable that has not been used so far. Implements
-        abstract method :meth:`.firstorder.atomic.Variable.fresh`.
+        abstract method :meth:`.firstorder.term.Variable.fresh`.
         """
         return self.VV.fresh(suffix=f'_{str(self)}')

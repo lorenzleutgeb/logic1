@@ -1,6 +1,15 @@
 # Logic1 &ndash; Interpreted First-order Logic in Python
 
-Authors: Nicolas Faroß, Thomas Sturm
+![GitHub](https://img.shields.io/badge/GitHub-rgb(9,105,218)?style=flat-square)
+![GitHub Release](https://img.shields.io/github/v/release/logic1-eu/logic1?style=flat-square&label=release&color=rgb(9,105,218))
+![GitHub release date](https://img.shields.io/github/release-date/logic1-eu/logic1?style=flat-square&label=release%20date&color=rgb(9,105,218))
+
+![conda-forge](https://img.shields.io/badge/conda--forge-rgb(0,132,120)?style=flat-square)
+![Conda Version](https://img.shields.io/conda/v/conda-forge/logic1?style=flat-square&label=version&color=rgb(0,132,120))
+![Conda Platform](https://img.shields.io/conda/p/conda-forge/logic1?style=flat-square&label=platform&color=rgb(0,132,120))
+![Conda Downloads](https://img.shields.io/conda/d/conda-forge/logic1?style=flat-square&label=downloads&color=rgb(0,132,120))
+
+Authors: Nicolas Faroß, Lorenz Leutgeb, Thomas Sturm
 
 License: GPL-2.0-or-later. See the [LICENSE](LICENSE) file for details.
 
@@ -8,9 +17,26 @@ Documentation: [docs.logic1.eu](https://docs.logic1.eu)
 
 ## About
 
-This software is currently a research prototype. We want to arrive at a
-well-documented robust first distribution soon. You are very welcome to follow
-our development already now.
+This software is still at an early development stage. Nevertheless, you are very
+welcome to use it already now. Any feedback is highly appreciated!
+
+Logic1 can be installed via Conda from the conda-forge conda channel. You will
+need a working Conda installation: either Miniforge, Mambaforge, Miniconda,
+or Anaconda. Miniforge and Mambaforge use conda-forge as the default channel.
+If you are using Miniconda or Anaconda, set it up to use conda-forge as follows:
+
+```shell
+conda config --add channels conda-forge
+conda config --set channel_priority strict
+```
+
+Create and activate a new conda environment containing Logic1, either with mamba
+or conda:
+
+```shell
+conda create -n logic1 logic1
+conda activate logic1
+```
 
 ## Description
 

@@ -110,18 +110,22 @@ class Node(Generic[α, τ, χ, σ, λ, μ], ABC):
 
     @abstractmethod
     def memorize(self) -> μ:
+        """Return a hashable object that identifies this node. This is used to
+        avoid processing the same node twice.
+        """
         ...
 
     @abstractmethod
     def process(self, assumptions: λ) -> Sequence[Self]:
-        """This `node` describes a formula ``Ex(node.variables,
+        """This ``node`` describes a formula ``Ex(node.variables,
         node.formula)``. Select a `variable` from ``node.variables`` and
-        compute a list `S` of successor nodes such that:
+        compute a list ``S`` of successor nodes such that:
 
-        1. `variable` is not in ``successor.variables`` for `successor` in `S`;
+        1. ``variable`` is not in ``successor.variables`` for ``successor`` in
+           ``S``;
 
-        2. `variable` does not occur in ``successor.formula`` for `successor`
-           in `S`;
+        2. ``variable`` does not occur in ``successor.formula`` for ``successor``
+           in ``S``;
 
         3. ``Or(*(Ex(successor.variables, successor.formula) for s in S))`` is
            logically equivalent to ``Ex(node.variables, node.formula)``.
@@ -131,6 +135,10 @@ class Node(Generic[α, τ, χ, σ, λ, μ], ABC):
 
 @dataclass
 class NodeList(Collection[ν], Generic[ν, μ]):
+    """A list of nodes with a memory to avoid duplicates and statistics about
+    the number of nodes added and dropped.
+    """
+
     # Sequential only
 
     nodes: list[ν] = field(default_factory=list)
@@ -148,6 +156,10 @@ class NodeList(Collection[ν], Generic[ν, μ]):
         return len(self.nodes)
 
     def append(self, node: ν) -> bool:
+        """Append ``node`` to the list of nodes if it is not already in the
+        memory. Return ``True`` if ``node`` was appended, and ``False``
+        otherwise.
+        """
         memorize = node.memorize()
         is_new = memorize not in self.memory
         if is_new:
@@ -159,6 +171,9 @@ class NodeList(Collection[ν], Generic[ν, μ]):
         return is_new
 
     def extend(self, nodes: Iterable[ν]) -> None:
+        """Append ``nodes`` to the list of nodes if they are not already in the
+        memory.
+        """
         for node in nodes:
             self.append(node)
 
@@ -188,6 +203,12 @@ class NodeList(Collection[ν], Generic[ν, μ]):
 
 @dataclass
 class WorkingNodeList(NodeList[ν, μ]):
+    """A subclass of :class:`.NodeList` that is used for the list of nodes that
+    are currently being processed during quantifier elimination. Additionally,
+    it keeps track of the current number of nodes with a given number of
+    variables.
+    """
+
     # Sequential only
 
     node_counter: Counter[int] = field(default_factory=Counter)
@@ -546,7 +567,8 @@ class Assumptions(Generic[α, τ, χ, σ], ABC):
     may add further assumptions in the course of the elimination.
 
     .. seealso::
-        * The argument `assume` of :meth:`.QuantifierElimination.__call__`.
+
+        * The argument ``assume`` of :meth:`.QuantifierElimination.__call__`.
         * Generic quantifier elimination in :mod:`.RCF.qe`.
 
     This is an upper bound for the type variable :data:`.λ`.
@@ -568,12 +590,12 @@ class Assumptions(Generic[α, τ, χ, σ], ABC):
         self.atoms = list(atoms)
 
     def append(self, new_atom: α) -> None:
-        """Add `new_atom` as another assumption and simplify.
+        """Add ``new_atom`` as another assumption and simplify.
         """
         self.extend([new_atom])
 
     def extend(self, new_atoms: Iterable[α]) -> None:
-        """Add `new_atoms` as further assumptions and simplify.
+        """Add ``new_atoms`` as further assumptions and simplify.
         """
         self.atoms.extend(new_atoms)
         # NF nörgelt
@@ -591,10 +613,10 @@ class Assumptions(Generic[α, τ, χ, σ], ABC):
 
     @abstractmethod
     def simplify(self, f: Formula[α, τ, χ, σ]) -> Formula[α, τ, χ, σ]:
-        """`f` is a (possibly unary or trivial) conjunction of atoms. Simplifes
-        `f` in such a way that the result is again a (possibly unary or
-        trivial) conjunction of atoms. Raises :class:`.Inconsistent` if `f` is
-        simplified to :data:`.F`.
+        """``f`` is a (possibly unary or trivial) conjunction of atoms.
+        Simplifes ``f`` in such a way that the result is again a (possibly unary
+        or trivial) conjunction of atoms. Raises :class:`.Inconsistent` if ``f``
+        is simplified to :data:`.F`.
         """
         ...
 
@@ -610,37 +632,41 @@ class Options:
     """
 
     log_level: int
-    """The `log_level` of the logger used by :class:`.QuantifierElimination`.
+    """The logging level of the logger used
     """
 
     log_rate: float
-    """The minimal timespan (in s) between to log outputs in certain loops.
+    """The minimal timespan (in s) between log outputs when reporting progress
     """
 
     workers: int
-    """The number of worker processes used. For more information see the
-    documentation of the parameter `workers` of :meth:`.__call__`.
+    """Controls the number of CPUs used for processing subproblems:
 
-    :param workers:
-      Specifies the number of processes to be used in parallel:
+    * With the default value ``workers=0``, the implementation runs
+      sequentially. For all other values, additional processes are started.
 
-      * The default value `workers=0` uses a sequential implementation,
-        which avoids overhead when input problems are small. For all other
-        values, there are additional processes started.
+    * A positive value ``workers=n`` uses ``n + 2`` CPUs: ``n`` for worker
+      processes that process subproblems, one for the master process, and
+      another one for a proxy process that manages shared data.
 
-      * A positive value `workers=n > 0` uses `n + 2` processes: the master
-        process, `n` worker processes, and a proxy processes that manages
-        shared data.
+    * A negative value ``workers=-n`` uses ``os.cpu_count() - n`` CPUs for
+      workers, plus two additional CPUs for the master and proxy processes. It
+      follows that ``workers=-2`` uses all available CPUs, while ``workers=-3``
+      leaves one CPU free.
 
-        .. note::
-          `workers=1` uses the parallel implementation with only one
-          worker. Algorithmically this is similar to the sequential version
-          with `workers=0` but comes at the cost of 2 additional processes.
+    .. attention::
 
-      * A negative value `workers=-n < 0` specifies ``os.num_cpu() - n``
-        many workers.  It follows that `workers=-2` exactly allocates all
-        of CPUs of the machine, and workers=-3 is an interesting choice,
-        which leaves one CPU free for smooth interaction with the machine.
+      * ``workers=1`` uses the parallel implementation with only one worker.
+        Algorithmically, this is similar to the sequential implementation with
+        ``workers=0``, but introduces overhead.
+
+      * ``workers=-1`` uses ``os.cpu_count() + 1`` CPUs, which is not a
+        natural choice.
+
+    .. seealso::
+
+      :class:`logic1.abc.qe.Node`
+        The subproblems referred to above correspond to instances of this class.
     """
 
     def __init__(self, log_level: int = logging.NOTSET, log_rate: float = 0.5,
@@ -796,7 +822,7 @@ class QuantifierElimination(Generic[ν, μ, λ, ι, ω, α, τ, χ, σ], ABC):
           generic type :data:`.ω`, which extends :class:`.Options`.
 
         :returns:
-          A quantifier-free equivalent of `f` modulo certain assumptions. A
+          A quantifier-free equivalent of ``f`` modulo certain assumptions. A
           simplified equivalent of all relevant assumptions are available as
           :attr:`.assumptions`.
 

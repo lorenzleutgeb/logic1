@@ -1,6 +1,6 @@
 """This module :mod:`logic1.abc.bnf` provides a generic abstract implementation
-of boolean normal form computations using the famous Espresso algorithm in
-combination with boolean abstraction. Techincally, we use the python package
+of Boolean normal form computations using the famous Espresso algorithm in
+combination with Boolean abstraction. Technically, we use the python package
 `PyEDA <https://pyeda.readthedocs.io/en/latest/index.html>`_, which in turns
 wraps a `C extension
 <https://ptolemy.berkeley.edu/projects/embedded/pubs/downloads/espresso/_index.htm>`_
@@ -43,14 +43,14 @@ class BooleanNormalForm(ABC, Generic[α, τ, χ, σ]):
     _pyeda_to_atoms: dict[expr.Literal, AtomicFormula] = field(default_factory=dict)
 
     def cnf(self, f: Formula[α, τ, χ, σ]) -> Formula[α, τ, χ, σ]:
-        """Compute a conjunctive normal form. If `f` contains quantifiers, then
-        the result is a prenex normal form whose matrix is in CNF.
+        """Compute a conjunctive normal form. If ``f`` contains quantifiers,
+        then the result is a prenex normal form whose matrix is in CNF.
         """
         return self.final_simplify(Not(self._dnf(Not(f))).to_nnf())
 
     def dnf(self, f: Formula[α, τ, χ, σ]) -> Formula[α, τ, χ, σ]:
-        """Compute a disjunctive normal form. If `f` contains quantifiers, then
-        the result is a prenex normal form whose matrix is in DNF.
+        """Compute a disjunctive normal form. If ``f`` contains quantifiers,
+        then the result is a prenex normal form whose matrix is in DNF.
         """
         return self.final_simplify(self._dnf(f))
 
@@ -122,15 +122,14 @@ class BooleanNormalForm(ABC, Generic[α, τ, χ, σ]):
 
     @abstractmethod
     def simplify(self, f: Formula[α, τ, χ, σ]) -> Formula[α, τ, χ, σ]:
-        """Compute a simplified equivalent of `f`.
+        """Compute a simplified equivalent of ``f``.
         """
         ...
 
     @abstractmethod
     def final_simplify(self, f: Formula[α, τ, χ, σ]) -> Formula[α, τ, χ, σ]:
-        """Compute a simplified equivalent of `f`, preserving the normal form of
-          `f`. This method is called at the end of the CNF and DNF computations
-          to simplify the result, but it should not change the normal form of
-          the result if it is already in normal form.
+        """This method is called at the end of CNF and DNF computations
+        to simplify the result. It computes a simplified equivalent of ``f``
+        preserving the normal form of ``f`` just computed.
         """
         ...

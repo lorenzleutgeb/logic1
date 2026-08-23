@@ -361,9 +361,9 @@ class VariableSet(firstorder.VariableSet['Variable']):
     .. seealso::
         Final methods inherited from parent class:
 
-        * :meth:`.firstorder.atomic.VariableSet.get`
+        * :meth:`.firstorder.term.VariableSet.get`
             -- obtain several variables simultaneously
-        * :meth:`.firstorder.atomic.VariableSet.imp`
+        * :meth:`.firstorder.term.VariableSet.imp`
             -- import variables into global namespace
     """
 
@@ -379,7 +379,7 @@ class VariableSet(firstorder.VariableSet['Variable']):
         return self._stack[-1]
 
     def __getitem__(self, name: str) -> Variable:
-        """Implements abstract method :meth:`.firstorder.atomic.VariableSet.__getitem__`.
+        """Implements abstract method :meth:`.firstorder.term.VariableSet.__getitem__`.
         """
         if not isinstance(name, str):
             raise ValueError(f'expecting string as index; {name} is {type(name)}')
@@ -773,7 +773,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
     def __eq__(self, other: Term | Constant) -> Eq:  # type: ignore[override]
         # MyPy requires "other: object". However, with our use a a constructor,
         # it makes no sense to compare terms with general objects. We have
-        # Eq.__bool__, which supports some comparisons in boolean contexts.
+        # Eq.__bool__, which supports some comparisons in Boolean contexts.
         # Same for __ne__.
         lhs = self - other
         # Use _poly.leadling_coefficient() in order to support @lru_cache on
@@ -804,7 +804,9 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
             return Gt(lhs, 0)
 
     def __hash__(self) -> int:
-        return hash(self._summands_as_hashable())
+        # We use this low-level approach because
+        # hash(self._summands_as_hashable()) was too slow.
+        return hash(repr(self._poly))
 
     def __init__(self, arg: Constant) -> None:
         """
@@ -934,7 +936,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     def as_latex(self) -> str:
         """LaTeX representation as a string. Implements the abstract method
-        :meth:`.firstorder.atomic.Term.as_latex`.
+        :meth:`.firstorder.term.Term.as_latex`.
 
         >>> x, y = VV.get('x', 'y')
         >>> t = (x - y + 2) ** 2
@@ -1462,7 +1464,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     def sort_key(self) -> SortKey[Self]:
         """A sort key suitable for ordering instances of this class. Implements
-        the abstract method :meth:`.firstorder.atomic.Term.sort_key`.
+        the abstract method :meth:`.firstorder.term.Term.sort_key`.
         """
         return SortKey(self)
 
@@ -1579,7 +1581,7 @@ class Term(firstorder.Term['Term', 'Variable', int, SortKey['Term']]):
 
     def vars(self) -> Iterator[Variable]:
         """An iterator that yields each variable of this term once. Implements
-        the abstract method :meth:`.firstorder.atomic.Term.vars`.
+        the abstract method :meth:`.firstorder.term.Term.vars`.
         """
         poly = self._poly
         context = poly.context()
@@ -1596,7 +1598,7 @@ class Variable(Term, firstorder.Variable['Variable', int, SortKey['Variable']]):
 
     def fresh(self) -> Variable:
         """Returns a variable that has not been used so far. Implements
-        abstract method :meth:`.firstorder.atomic.Variable.fresh`.
+        abstract method :meth:`.firstorder.term.Variable.fresh`.
         """
         return VV.fresh(suffix=f'_{str(self)}')
 

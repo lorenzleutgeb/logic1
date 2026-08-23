@@ -5,34 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-We are at 18 May 2025, 17:38 in GIT
+## [0.3.0] - 2026-08-18
 
 ### Added
 
+#### new module `interactive`
+
+- Loaders for Complex, RCF and Sets for interactive use, which do the following:
+    1. `from logic1.firstorder import *`
+    2. Define python symbols `a`, ..., `z` as corresponding variables
+
+#### new module `Complex`
+
+- A theory `Complex` for ring arithmtic along with `I`, `Re`, `Im`, `Conj` over the complex numbers. Quantifier elimination uses reduction to real QE. See [Faross-Sturm](https://doi.org/10.48550/arXiv.2604.26400) for theoretical details.
+
+#### module `RCF`
+
+- Options `xopt` and `elimination_order` for method `qe`. This activates optimized quantifier elimination by virtual substitution for weakly parametric linear formulas.
+
+- Option `implicit_ranges` for method `simplify`. This improves the use nonlocal information during simplification.
+
+- Option `assumptions` for `Term.is_definite`.
+
 - Support for substituting rational functions into terms within atoms
 
-#### module `interactive`
+- Support for input of rational coefficients as Python floats in class `Term`. New methods `Term.primitive_part`, `Term.subs_linear_solution`, `Term.summands`
 
-A loader for RCF for interactive use, which does the following:
+- New method `AtomicFormula.is_weakly_parametric_linear`
 
-1. `from logic1.firstorder import *`
-2. Define python symbols `a`, ..., `z` as corresponding variables
+- An experimental Flint-based implemenation of `Term` as an alternative to the existing Sage-based implementation. So far, this can be acivated only by editing `term/__init__.py`.
 
 ### Fixed
 
-- Raise an exception with assumptions on bound variables in `abc.qe.QuantifierElimination.quantifier_elimination`.
+#### module `abc`
+
+- Method `Simplify._simpl_and_or` did not terminate in rare cases.
+
+- Raise an exception with assumptions on bound variables in `qe.QuantifierElimination.quantifier_elimination`.
+
+#### module `RCF`
+
+- Method `qe` wrongly computed `F` for `Ex([a, b], a != 0)`, where the problem was the quantification of an unused variable.
+
+- Method `qe` raised an error when applied to `Ex(x, T)` or, more generally, quantifications of formulas equivalent to truth values modulo application of the method `simplify`.
+
+- Add a method `Term.__setstate__` to prevent
+cached hashes of Terms from being sent to processes with a different hash seed in parallel quantifier elimination.
+
+- Arguments `prefer_order=True` and `prefer_weak=True` were missing in the root node simplification in method `qe.VirtualSubstitution.create_root_nodes`.
+
+- Methods `cnf` and `dnf` could return equivalent formulas that were not in the respective normal form, because final simplification split atoms.
 
 ### Changed
 
-#### RCF Simplifier
+#### module `abc`
 
-- Add arithmetic to class `RCF.simplify._Range`.
+- Attribute `qe.NodeList.memory: Set` is generic now, supporting arbitrary Hashables as set members.
 
-- `RCF.atomic.Term.is_definite` optionally supports assumptions
+- Instances of class `qe.Assumptions` are hashable now.
 
-- Propagates bounds on variables via interval arithmetic
+#### module `RCF`
+
+- Improve method `simplify._Knowledge._term_as_range` to obtain more precise ranges with the new simplifier option `implicit_ranges` mentiomed above. The key idea is propagating bounds on variables via interval arithmetic.
+
+- Migrate class `simplify._Range` to Cython. Add mutable arithmetic. Remove depency on class `mpfr`, and method `is_finite` in favor of inline code.
+
+- Refactor class `qe.Node` into new additional module `node`, changing the return type of method `process` in class `Node` from `list` to `Sequence`. Add sublasses `node.vs.Node` and `node.xopt.Node` with corresponding helper classes.
+
+- Move and rename subclasses `qe.CLUSTERING`, `qe.GENERIC` to `node.base.Clustering`, `node.base.Generic`, respectively.
+
+- Add `@lru_cache` to methods `constant_coefficient`, `content`, `lc`, `normalize` in class `term.term_sage.Term`. Caching for `lc` required adapting implementation details of `Term.__eq__`.
+
+- Refactor module `atomic` into `atomic` and new module `term`. Likewise, `firstorder.atomic`.
+
+- More systematic choice of log levels in method `qe`.
 
 #### module `support`
 
@@ -40,9 +86,17 @@ A loader for RCF for interactive use, which does the following:
 
 #### Infrastructure
 
-Bumped deployment target from Python 3.11/Sage 10.0 to Python 3.12/Sage 10.6
+- Renamed all modules `*.typing` to `*.types` in order to avoid name clashes with Python standard library modules.
+
+- Thorough revision of the main `Makefile`.
+
+- Trigger GitHub worflows on push to main.
+
+- Bumped deployment target from Python 3.11/Sage 10.0 to Python 3.12/Sage 10.6
 
 ### Removed
+
+- Exception `RCF.qe.Failed`
 
 
 ## [0.2.0] - 2025-02-11
